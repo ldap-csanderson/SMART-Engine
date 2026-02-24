@@ -5,15 +5,12 @@ import NewFilterModal from '../components/NewFilterModal'
 export default function FiltersPage() {
   const navigate = useNavigate()
   const [filters, setFilters] = useState([])
-  const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState({})
 
   const fetchFilters = async () => {
     try {
-      const status = showArchived ? 'archived' : undefined
-      const url = status ? `/api/filters?status=${status}` : '/api/filters'
-      const response = await fetch(url)
+      const response = await fetch('/api/filters')
       const data = await response.json()
       setFilters(data.filters || [])
     } catch (err) {
@@ -23,33 +20,7 @@ export default function FiltersPage() {
 
   useEffect(() => {
     fetchFilters()
-  }, [showArchived])
-
-  const handleArchive = async (filterId) => {
-    setActionLoading((prev) => ({ ...prev, [filterId]: true }))
-    try {
-      const response = await fetch(`/api/filters/${filterId}/archive`, { method: 'PATCH' })
-      if (!response.ok) throw new Error('Failed to archive')
-      fetchFilters()
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [filterId]: false }))
-    }
-  }
-
-  const handleUnarchive = async (filterId) => {
-    setActionLoading((prev) => ({ ...prev, [filterId]: true }))
-    try {
-      const response = await fetch(`/api/filters/${filterId}/unarchive`, { method: 'PATCH' })
-      if (!response.ok) throw new Error('Failed to unarchive')
-      fetchFilters()
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [filterId]: false }))
-    }
-  }
+  }, [])
 
   const handleDelete = async (filterId, filterName) => {
     if (!window.confirm(`Delete filter "${filterName}"? This cannot be undone.`)) return
@@ -66,7 +37,7 @@ export default function FiltersPage() {
     }
   }
 
-  const handleCreated = (newFilter) => {
+  const handleCreated = () => {
     fetchFilters()
   }
 
@@ -87,35 +58,18 @@ export default function FiltersPage() {
           </button>
         </div>
 
-        {/* Section Header */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">
-            {showArchived ? 'Archived Filters' : 'Active Filters'}
-          </h2>
-          <button
-            onClick={() => setShowArchived(!showArchived)}
-            className="px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 focus:outline-none"
-          >
-            {showArchived ? '← Back to Active Filters' : 'View Archived →'}
-          </button>
-        </div>
-
         {/* Filters List */}
         {filters.length === 0 ? (
           <div className="bg-white rounded-lg shadow p-12 text-center">
-            {showArchived ? (
-              <p className="text-gray-500">No archived filters</p>
-            ) : (
-              <div className="flex flex-col items-center">
-                <button
-                  onClick={() => setIsModalOpen(true)}
-                  className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm mb-4"
-                >
-                  + New Filter
-                </button>
-                <p className="text-gray-500">No filters yet — create your first filter</p>
-              </div>
-            )}
+            <div className="flex flex-col items-center">
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm mb-4"
+              >
+                + New Filter
+              </button>
+              <p className="text-gray-500">No filters yet — create your first filter</p>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -133,15 +87,6 @@ export default function FiltersPage() {
                           {filter.label}
                         </span>
                       )}
-                      <span
-                        className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
-                          filter.status === 'archived'
-                            ? 'bg-gray-100 text-gray-800'
-                            : 'bg-green-100 text-green-800'
-                        }`}
-                      >
-                        {filter.status}
-                      </span>
                     </div>
                     {filter.text && (
                       <p className="text-sm text-gray-600 line-clamp-2 mt-1">{filter.text}</p>
@@ -159,30 +104,12 @@ export default function FiltersPage() {
                       View
                     </button>
 
-                    {filter.status !== 'archived' ? (
-                      <button
-                        onClick={() => handleArchive(filter.filter_id)}
-                        disabled={actionLoading[filter.filter_id]}
-                        className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[filter.filter_id] ? '...' : 'Archive'}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleUnarchive(filter.filter_id)}
-                        disabled={actionLoading[filter.filter_id]}
-                        className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[filter.filter_id] ? '...' : 'Unarchive'}
-                      </button>
-                    )}
-
                     <button
                       onClick={() => handleDelete(filter.filter_id, filter.name)}
                       disabled={actionLoading[filter.filter_id]}
                       className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Delete
+                      {actionLoading[filter.filter_id] ? 'Deleting...' : 'Delete'}
                     </button>
                   </div>
                 </div>

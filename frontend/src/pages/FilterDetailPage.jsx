@@ -84,21 +84,6 @@ export default function FilterDetailPage() {
     }
   }
 
-  const handleArchiveToggle = async () => {
-    const isArchived = filter.status === 'archived'
-    const endpoint = isArchived ? 'unarchive' : 'archive'
-
-    try {
-      const response = await fetch(`/api/filters/${filterId}/${endpoint}`, { method: 'PATCH' })
-      if (!response.ok) throw new Error('Failed to update status')
-      const refreshed = await fetch(`/api/filters/${filterId}`)
-      const data = await refreshed.json()
-      setFilter(data)
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    }
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -148,39 +133,16 @@ export default function FilterDetailPage() {
         </button>
 
         <div className="bg-white rounded-lg shadow p-8">
-          {/* Title and Status */}
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">{filter?.name}</h1>
-              <span
-                className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
-                  filter?.status === 'archived'
-                    ? 'bg-gray-100 text-gray-800'
-                    : 'bg-green-100 text-green-800'
-                }`}
-              >
-                {filter?.status}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleArchiveToggle}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                  filter?.status === 'archived'
-                    ? 'bg-green-600 text-white hover:bg-green-700 focus:ring-green-500'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300 focus:ring-gray-500'
-                }`}
-              >
-                {filter?.status === 'archived' ? 'Unarchive' : 'Archive'}
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {deleting ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
+          {/* Title and Delete */}
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-2xl font-bold text-gray-900">{filter?.name}</h1>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {deleting ? 'Deleting...' : 'Delete'}
+            </button>
           </div>
 
           <p className="text-sm text-gray-400 mb-6">
