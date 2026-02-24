@@ -10,10 +10,7 @@ export default function KeywordReportsPage() {
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const reportsRef = useRef(reports)
-  // How many real (non-temp) reports existed before the last optimistic add
-  const baselineCountRef = useRef(0)
 
-  // Keep ref in sync so setTimeout callbacks can read current state
   useEffect(() => {
     reportsRef.current = reports
   }, [reports])
@@ -25,28 +22,7 @@ export default function KeywordReportsPage() {
       const url = status ? `/api/keyword-reports?status=${status}` : '/api/keyword-reports'
       const response = await fetch(url)
       const data = await response.json()
-      const serverReports = data.reports || []
-
-      setReports((prev) => {
-        const hasTempEntries = prev.some((r) => r.report_id.startsWith('temp-'))
-
-        if (!hasTempEntries) {
-          // No pending optimistic entries — just use server data
-          return serverReports
-        }
-
-        // Server count grew past our baseline → new report arrived, drop all temps
-        if (serverReports.length > baselineCountRef.current) {
-          return serverReports
-        }
-
-        // Still waiting — keep temp entries alongside existing server results
-        const serverIds = new Set(serverReports.map((r) => r.report_id))
-        const survivingTemp = prev.filter(
-          (r) => r.report_id.startsWith('temp-') && !serverIds.has(r.report_id)
-        )
-        return [...survivingTemp, ...serverReports]
-      })
+      setReports(data.reports || [])
     } catch (err) {
       console.error('Failed to fetch reports:', err)
     } finally {
@@ -54,15 +30,15 @@ export default function KeywordReportsPage() {
     }
   }
 
-  // Adaptive polling: 500ms while pending, 30s otherwise
+  // Poll every 500ms while any report is still processing, 30s otherwise
   useEffect(() => {
     fetchReports(true)
 
     const timerRef = { current: null }
 
     const tick = () => {
-      const hasPending = reportsRef.current.some((r) => r.report_id.startsWith('temp-'))
-      const delay = hasPending ? 500 : 30_000
+      const hasProcessing = reportsRef.current.some((r) => r.status === 'processing')
+      const delay = hasProcessing ? 500 : 30_000
       timerRef.current = setTimeout(async () => {
         await fetchReports(false)
         tick()
@@ -80,23 +56,8 @@ export default function KeywordReportsPage() {
     navigate(`/keyword-reports/${reportId}`)
   }
 
-  const handleNewReportSubmit = (reportData) => {
-    // Record how many real reports exist right now so we know when the new one lands
-    baselineCountRef.current = reportsRef.current.filter(
-      (r) => !r.report_id.startsWith('temp-')
-    ).length
-
-    const processingReport = {
-      report_id: 'temp-' + Date.now(),
-      name: reportData.name || `Report ${new Date().toLocaleString()}`,
-      created_at: new Date().toISOString(),
-      status: 'processing',
-      urls: reportData.urls,
-      total_keywords_found: 0,
-      error_message: null,
-    }
-
-    setReports((prev) => [processingReport, ...prev])
+  const handleReportCreated = () => {
+    fetchReports(false)
   }
 
   return (
@@ -151,7 +112,7 @@ export default function KeywordReportsPage() {
         <NewReportModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          onSubmit={handleNewReportSubmit}
+          onCreated={handleReportCreated}
         />
       </div>
     </div>

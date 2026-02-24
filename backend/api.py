@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.ads.googleads.client import GoogleAdsClient
@@ -309,10 +309,42 @@ def health_check():
 # Keyword Reports
 # ---------------------------------------------------------------------------
 
-@app.post("/keyword-reports", response_model=KeywordPlannerResponse)
-def create_keyword_report(request: URLRequest):
+def _process_report_background(report_id: str, urls: List[str]):
+    """Background task: run Google Ads API and write results to BigQuery + update Firestore."""
+    print(f"🔄 Background processing started for report {report_id}")
+    total_keywords = 0
+
+    try:
+        for idx, url in enumerate(urls):
+            print(f"\n[{idx + 1}/{len(urls)}] Processing: {url}")
+            keyword_ideas = fetch_keyword_ideas_from_url(ga_client, CUSTOMER_ID, url)
+            insert_keywords_to_bq(report_id, url, keyword_ideas)
+            total_keywords += len(keyword_ideas)
+            print(f"Found {len(keyword_ideas)} keywords for this URL")
+
+        # Mark as completed
+        db.collection("keyword_reports").document(report_id).update({
+            "status": "completed",
+            "total_keywords_found": total_keywords,
+        })
+        print(f"✅ Report {report_id} completed — {total_keywords} keywords")
+
+    except Exception as e:
+        print(f"❌ Background processing failed for report {report_id}: {e}")
+        try:
+            db.collection("keyword_reports").document(report_id).update({
+                "status": "failed",
+                "error_message": str(e),
+            })
+        except Exception:
+            pass
+
+
+@app.post("/keyword-reports", response_model=KeywordReport)
+def create_keyword_report(request: URLRequest, background_tasks: BackgroundTasks):
     """
-    Fetch keyword planner data for multiple URLs and save to Firestore + BigQuery.
+    Write report metadata to Firestore immediately (status: processing),
+    then kick off Google Ads API work in the background.
     """
     if ga_client is None:
         raise HTTPException(
@@ -330,46 +362,28 @@ def create_keyword_report(request: URLRequest):
         )
 
     report_id = str(uuid.uuid4())
-
-    print(f"🎯 Processing {len(request.urls)} URL(s) - Report ID: {report_id}")
-    print("=" * 60)
-
-    all_results = {}
-    total_keywords = 0
-
-    for idx, url in enumerate(request.urls):
-        print(f"\n[{idx + 1}/{len(request.urls)}] Processing: {url}")
-        print("-" * 60)
-
-        try:
-            keyword_ideas = fetch_keyword_ideas_from_url(ga_client, CUSTOMER_ID, url)
-            all_results[url] = keyword_ideas
-            total_keywords += len(keyword_ideas)
-            print(f"Found {len(keyword_ideas)} keywords for this URL")
-            insert_keywords_to_bq(report_id, url, keyword_ideas)
-        except Exception as e:
-            print(f"Error processing {url}: {e}")
-            all_results[url] = []
-
-    summary = {
-        "urls_analyzed": len(request.urls),
-        "total_keywords_found": total_keywords,
-        "keywords_per_url": {url: len(keywords) for url, keywords in all_results.items()},
-    }
-
     report_name = request.name if request.name else f"Report {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
 
-    insert_report_to_firestore(report_id, report_name, request.urls, total_keywords, status="completed")
+    # Write metadata immediately so the frontend can see it right away
+    insert_report_to_firestore(report_id, report_name, request.urls, 0, status="processing")
 
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(f"Report ID: {report_id}")
-    print(f"URLs analyzed: {summary['urls_analyzed']}")
-    print(f"Total keywords found: {summary['total_keywords_found']}")
-    print("✅ Process complete!")
+    # Kick off the heavy lifting in the background
+    background_tasks.add_task(_process_report_background, report_id, request.urls)
 
-    return KeywordPlannerResponse(report_id=report_id, results=all_results, summary=summary)
+    # Re-fetch to get the server timestamp
+    doc = db.collection("keyword_reports").document(report_id).get()
+    data = doc.to_dict()
+
+    print(f"🎯 Report {report_id} queued for processing")
+
+    return KeywordReport(
+        report_id=data["report_id"],
+        name=data["name"],
+        created_at=_ts_to_str(data["created_at"]),
+        status=data["status"],
+        urls=data["urls"],
+        total_keywords_found=data["total_keywords_found"],
+    )
 
 
 @app.get("/keyword-reports", response_model=KeywordReportsListResponse)

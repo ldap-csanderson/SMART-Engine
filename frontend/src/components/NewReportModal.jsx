@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 
-export default function NewReportModal({ isOpen, onClose, onSubmit }) {
+export default function NewReportModal({ isOpen, onClose, onCreated }) {
   const [name, setName] = useState('')
   const [urls, setUrls] = useState('')
   const [error, setError] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
 
   // Generate placeholder timestamp once when modal opens
@@ -28,38 +29,42 @@ export default function NewReportModal({ isOpen, onClose, onSubmit }) {
       return
     }
 
-    const reportData = {
-      name: name.trim(),
-      urls: urlList,
-    }
-
-    if (onSubmit) {
-      onSubmit(reportData)
-    }
-
-    // Reset and close immediately (optimistic UI)
-    setName('')
-    setUrls('')
+    setSubmitting(true)
     setError(null)
-    setPlaceholder('')
-    onClose()
 
-    // Fetch in background
     try {
-      await fetch('/api/keyword-reports', {
+      const response = await fetch('/api/keyword-reports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           urls: urlList,
-          name: reportData.name || undefined,
+          name: name.trim() || undefined,
         }),
       })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to create report')
+      }
+
+      // Reset and close
+      setName('')
+      setUrls('')
+      setError(null)
+      setPlaceholder('')
+      onClose()
+
+      // Tell the parent to refresh the list
+      if (onCreated) onCreated()
     } catch (err) {
-      console.error('Background fetch error:', err)
+      setError(err.message)
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const handleClose = () => {
+    if (submitting) return
     setName('')
     setUrls('')
     setError(null)
@@ -84,7 +89,8 @@ export default function NewReportModal({ isOpen, onClose, onSubmit }) {
             <h2 className="text-2xl font-bold text-gray-900">New Report</h2>
             <button
               onClick={handleClose}
-              className="text-gray-400 hover:text-gray-600"
+              disabled={submitting}
+              className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -105,6 +111,7 @@ export default function NewReportModal({ isOpen, onClose, onSubmit }) {
                 placeholder={placeholder}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                disabled={submitting}
               />
             </div>
 
@@ -120,6 +127,7 @@ export default function NewReportModal({ isOpen, onClose, onSubmit }) {
                 placeholder={'https://www.example.com\nhttps://www.another-site.com'}
                 value={urls}
                 onChange={(e) => setUrls(e.target.value)}
+                disabled={submitting}
                 required
               />
             </div>
@@ -136,15 +144,25 @@ export default function NewReportModal({ isOpen, onClose, onSubmit }) {
               <button
                 type="button"
                 onClick={handleClose}
-                className="px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+                disabled={submitting}
+                className="px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                disabled={submitting}
+                className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create Report
+                {submitting ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Creating...
+                  </span>
+                ) : 'Create Report'}
               </button>
             </div>
           </form>
