@@ -443,6 +443,7 @@ def get_run_keywords(run_id: str):
         
         return {
             "run_id": run_data["run_id"],
+            "name": run_data.get("name", "Unnamed Run"),
             "created_at": created_at_str,
             "status": run_data["status"],
             "urls": run_data["urls"],
