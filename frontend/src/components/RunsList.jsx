@@ -49,7 +49,7 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-2">
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {run.urls.join(', ')}
+                  {run.name}
                 </h3>
                 <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                   run.status === 'completed' ? 'bg-green-100 text-green-800' :

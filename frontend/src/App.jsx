@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import SearchForm from './components/SearchForm'
 import RunsList from './components/RunsList'
 import KeywordTable from './components/KeywordTable'
+import NewRunModal from './components/NewRunModal'
 
 function App() {
   const [runs, setRuns] = useState([])
@@ -9,6 +9,7 @@ function App() {
   const [selectedRunId, setSelectedRunId] = useState(null)
   const [selectedRunData, setSelectedRunData] = useState(null)
   const [loadingRunData, setLoadingRunData] = useState(false)
+  const [isModalOpen, setIsModalOpen] = useState(false)
 
   // Fetch runs from API
   const fetchRuns = async () => {
@@ -63,22 +64,30 @@ function App() {
     }
   }
 
+  const handleNewRunSubmit = (data) => {
+    // Refresh runs list after new run created
+    fetchRuns()
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">
-            Keyword Planner Dashboard
-          </h1>
-          <p className="mt-2 text-gray-600">
-            Search for keywords and manage your research history
-          </p>
-        </div>
-
-        {/* Search Form */}
-        <div className="mb-8">
-          <SearchForm onNewRun={fetchRuns} />
+        {/* Header with New Run button */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">
+              Keyword Planner Dashboard
+            </h1>
+            <p className="mt-2 text-gray-600">
+              Manage your keyword research runs
+            </p>
+          </div>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
+          >
+            + New Run
+          </button>
         </div>
 
         {/* Runs Section Header */}
@@ -121,6 +130,13 @@ function App() {
             ) : null}
           </div>
         )}
+
+        {/* New Run Modal */}
+        <NewRunModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSubmit={handleNewRunSubmit}
+        />
       </div>
     </div>
   )
