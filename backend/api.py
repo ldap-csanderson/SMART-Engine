@@ -344,10 +344,7 @@ def list_runs(status: Optional[str] = None, limit: int = 100):
         
         # Filter by status
         if status:
-            query = query.where("status", "==", status)
-        elif status is None:
-            # Default: show all non-archived
-            query = query.where("status", "!=", "archived")
+            query = query.where(filter=firestore.FieldFilter("status", "==", status))
         
         docs = query.stream()
         
