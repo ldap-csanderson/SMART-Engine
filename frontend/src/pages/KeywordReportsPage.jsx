@@ -46,7 +46,7 @@ export default function KeywordReportsPage() {
 
     const tick = () => {
       const hasPending = reportsRef.current.some((r) => r.report_id.startsWith('temp-'))
-      const delay = hasPending ? 5_000 : 30_000
+      const delay = hasPending ? 500 : 30_000
       timerRef.current = setTimeout(async () => {
         await fetchReports(false)
         tick()
