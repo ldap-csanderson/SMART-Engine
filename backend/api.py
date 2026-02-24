@@ -24,7 +24,7 @@ RETRY_DELAY = 5  # seconds
 
 # Initialize Google Ads client
 try:
-    ga_client = GoogleAdsClient.load_from_storage("google-ads/google-ads.yaml")
+    ga_client = GoogleAdsClient.load_from_storage("../scripts/google-ads.yaml")
     print("✅ Connected to Google Ads API")
 except Exception as e:
     print(f"❌ Failed to load Google Ads client: {e}")
