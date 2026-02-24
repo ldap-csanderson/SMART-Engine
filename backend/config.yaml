@@ -1,0 +1,34 @@
+# Application Configuration
+app:
+  name: "Keyword Planner API"
+  version: "1.0.0"
+  host: "0.0.0.0"
+  port: 8000
+
+# Google Cloud Platform Settings
+gcp:
+  project_id: "csanderson-experimental-443821"
+  region: "us-central1"
+  credentials_path: "${GCP_SERVICE_ACCOUNT_KEY_PATH}"
+
+# BigQuery Settings
+bigquery:
+  dataset: "keyword_planner_data"
+  tables:
+    runs: "keyword_runs"
+    results: "keyword_results"
+  default_page_size: 100
+
+# Google Ads Settings
+google_ads:
+  customer_id: "2900871247"
+  config_path: "../scripts/google-ads.yaml"
+
+# API Settings
+api:
+  max_urls_per_request: 50
+  max_retries: 3
+  retry_delay_seconds: 5
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
