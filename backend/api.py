@@ -111,6 +111,7 @@ class Filter(BaseModel):
     label: str
     text: str
     created_at: str
+    updated_at: Optional[str] = None
     status: str
 
 
@@ -629,6 +630,7 @@ def get_filter(filter_id: str):
             label=data["label"],
             text=data["text"],
             created_at=_ts_to_str(data["created_at"]),
+            updated_at=_ts_to_str(data.get("updated_at")) or None,
             status=data.get("status", "active"),
         )
 
@@ -649,7 +651,7 @@ def update_filter(filter_id: str, payload: FilterUpdate):
         if not filter_ref.get().exists:
             raise HTTPException(status_code=404, detail=f"Filter {filter_id} not found")
 
-        updates = {}
+        updates = {"updated_at": firestore.SERVER_TIMESTAMP}
         if payload.name is not None:
             updates["name"] = payload.name
         if payload.label is not None:
@@ -657,8 +659,7 @@ def update_filter(filter_id: str, payload: FilterUpdate):
         if payload.text is not None:
             updates["text"] = payload.text
 
-        if updates:
-            filter_ref.update(updates)
+        filter_ref.update(updates)
 
         data = filter_ref.get().to_dict()
         return Filter(
@@ -667,6 +668,7 @@ def update_filter(filter_id: str, payload: FilterUpdate):
             label=data["label"],
             text=data["text"],
             created_at=_ts_to_str(data["created_at"]),
+            updated_at=_ts_to_str(data.get("updated_at")) or None,
             status=data.get("status", "active"),
         )
 

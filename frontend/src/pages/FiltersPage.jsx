@@ -91,9 +91,6 @@ export default function FiltersPage() {
                     {filter.text && (
                       <p className="text-sm text-gray-600 line-clamp-3 mt-1">{filter.text}</p>
                     )}
-                    <p className="text-xs text-gray-400 mt-2">
-                      Created: {new Date(filter.created_at).toLocaleString()}
-                    </p>
                   </div>
 
                   <div className="flex gap-2 ml-4 flex-shrink-0">

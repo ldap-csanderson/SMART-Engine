@@ -145,9 +145,11 @@ export default function FilterDetailPage() {
             </button>
           </div>
 
-          <p className="text-sm text-gray-400 mb-6">
-            Created: {filter ? new Date(filter.created_at).toLocaleString() : ''}
-          </p>
+          {filter?.updated_at && (
+            <p className="text-sm text-gray-400 mb-6">
+              Last modified: {new Date(filter.updated_at).toLocaleString()}
+            </p>
+          )}
 
           {/* Edit Form */}
           <form onSubmit={handleSave}>
