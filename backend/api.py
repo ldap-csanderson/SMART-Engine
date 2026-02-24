@@ -473,6 +473,28 @@ def archive_run(run_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to archive run: {str(e)}")
 
 
+@app.patch("/runs/{run_id}/unarchive")
+def unarchive_run(run_id: str):
+    """Unarchive a run (restore from archived state)"""
+    if not bq_client:
+        raise HTTPException(status_code=503, detail="BigQuery client not initialized")
+    
+    query = f"""
+        UPDATE `{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}`
+        SET status = 'completed'
+        WHERE run_id = '{run_id}' AND status = 'archived'
+    """
+    
+    try:
+        query_job = bq_client.query(query)
+        query_job.result()
+        
+        return {"message": f"Run {run_id} unarchived successfully", "run_id": run_id}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to unarchive run: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=config["app"]["host"], port=config["app"]["port"])
