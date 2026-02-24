@@ -18,9 +18,7 @@ export default function NewRunModal({ isOpen, onClose, onSubmit }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    setLoading(true)
-    setError(null)
-
+    
     // Parse URLs from textarea (one per line)
     const urlList = urls
       .split('\n')
@@ -29,44 +27,40 @@ export default function NewRunModal({ isOpen, onClose, onSubmit }) {
 
     if (urlList.length === 0) {
       setError('Please enter at least one URL')
-      setLoading(false)
       return
     }
 
+    // Call callback immediately (optimistic UI)
+    const runData = {
+      name: name.trim(),
+      urls: urlList
+    }
+    
+    if (onSubmit) {
+      onSubmit(runData)
+    }
+    
+    // Reset and close modal immediately
+    setName('')
+    setUrls('')
+    setError(null)
+    onClose()
+    
+    // Fetch in background
     try {
-      const response = await fetch('/api/keyword-planner', {
+      await fetch('/api/keyword-planner', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
           urls: urlList,
-          name: name.trim() || undefined  // Send undefined if empty (use backend default)
+          name: runData.name || undefined
         }),
       })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data = await response.json()
-      
-      // Call callback with name and URLs for optimistic UI
-      if (onSubmit) onSubmit({
-        name: name.trim(),
-        urls: urlList,
-        apiResponse: data
-      })
-      
-      // Reset and close
-      setName('')
-      setUrls('')
-      setError(null)
-      onClose()
     } catch (err) {
-      setError(`Error: ${err.message}`)
-    } finally {
-      setLoading(false)
+      console.error('Background fetch error:', err)
+      // Error handling happens via refresh
     }
   }
 
