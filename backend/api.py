@@ -65,6 +65,7 @@ except Exception as e:
 
 class URLRequest(BaseModel):
     urls: List[str]
+    name: Optional[str] = None
 
 
 class KeywordPlannerResponse(BaseModel):
@@ -75,6 +76,7 @@ class KeywordPlannerResponse(BaseModel):
 
 class Run(BaseModel):
     run_id: str
+    name: str
     created_at: str
     status: str
     urls: List[str]
@@ -87,7 +89,7 @@ class RunsListResponse(BaseModel):
     total_count: int
 
 
-def insert_run_to_firestore(run_id: str, urls: List[str], total_keywords: int, status: str = "completed", error_message: Optional[str] = None):
+def insert_run_to_firestore(run_id: str, name: str, urls: List[str], total_keywords: int, status: str = "completed", error_message: Optional[str] = None):
     """Insert a new run record into Firestore"""
     if not db:
         print("⚠️ Firestore client not initialized, skipping insert")
@@ -95,6 +97,7 @@ def insert_run_to_firestore(run_id: str, urls: List[str], total_keywords: int, s
     
     run_data = {
         "run_id": run_id,
+        "name": name,
         "created_at": firestore.SERVER_TIMESTAMP,
         "status": status,
         "urls": urls,
@@ -308,8 +311,11 @@ def get_keyword_planner_data(request: URLRequest):
         "keywords_per_url": {url: len(keywords) for url, keywords in all_results.items()}
     }
     
+    # Generate name if not provided
+    run_name = request.name if request.name else f"Run {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    
     # Insert run metadata into Firestore
-    insert_run_to_firestore(run_id, request.urls, total_keywords, status="completed")
+    insert_run_to_firestore(run_id, run_name, request.urls, total_keywords, status="completed")
     
     print("\n" + "=" * 60)
     print("SUMMARY")
@@ -369,6 +375,7 @@ def list_runs(status: Optional[str] = None, limit: int = 100):
             
             runs.append(Run(
                 run_id=data["run_id"],
+                name=data.get("name", "Unnamed Run"),
                 created_at=created_at_str,
                 status=data["status"],
                 urls=data["urls"],
