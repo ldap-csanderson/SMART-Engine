@@ -9,55 +9,67 @@ export default function KeywordReportsPage() {
   const [loading, setLoading] = useState(true)
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const reportsRef = useRef(reports)
+  // Incrementing this cancels the current timer and restarts the poll loop
+  const [pollTrigger, setPollTrigger] = useState(0)
+  const showArchivedRef = useRef(showArchived)
 
   useEffect(() => {
-    reportsRef.current = reports
-  }, [reports])
+    showArchivedRef.current = showArchived
+  }, [showArchived])
 
-  const fetchReports = async (isInitial = false) => {
-    if (isInitial) setLoading(true)
+  const fetchReports = async (showSpinner = false) => {
+    if (showSpinner) setLoading(true)
     try {
-      const status = showArchived ? 'archived' : undefined
+      const status = showArchivedRef.current ? 'archived' : undefined
       const url = status ? `/api/keyword-reports?status=${status}` : '/api/keyword-reports'
       const response = await fetch(url)
       const data = await response.json()
-      setReports(data.reports || [])
+      const freshReports = data.reports || []
+      setReports(freshReports)
+      return freshReports
     } catch (err) {
       console.error('Failed to fetch reports:', err)
+      return null
     } finally {
-      if (isInitial) setLoading(false)
+      if (showSpinner) setLoading(false)
     }
   }
 
-  // Poll every 500ms while any report is still processing, 30s otherwise
+  // Poll loop. Re-runs when showArchived or pollTrigger changes.
+  // Cancelling the old effect when pollTrigger increments kills the pending 30s timer,
+  // so the new loop can immediately start 500ms polling for processing reports.
   useEffect(() => {
-    fetchReports(true)
-
+    let cancelled = false
     const timerRef = { current: null }
 
-    const tick = () => {
-      const hasProcessing = reportsRef.current.some((r) => r.status === 'processing')
+    const schedule = (freshReports) => {
+      if (cancelled) return
+      const hasProcessing = freshReports?.some((r) => r.status === 'processing') ?? false
       const delay = hasProcessing ? 500 : 30_000
       timerRef.current = setTimeout(async () => {
-        await fetchReports(false)
-        tick()
+        if (cancelled) return
+        const data = await fetchReports(false)
+        schedule(data)
       }, delay)
     }
 
-    tick()
+    // showSpinner only on the very first load (pollTrigger===0 and loading is still true)
+    fetchReports(pollTrigger === 0 && loading).then(schedule)
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current)
+      cancelled = true
+      clearTimeout(timerRef.current)
     }
-  }, [showArchived])
+  }, [showArchived, pollTrigger])
 
   const handleViewReport = (reportId) => {
     navigate(`/keyword-reports/${reportId}`)
   }
 
   const handleReportCreated = () => {
-    fetchReports(false)
+    // Incrementing pollTrigger cancels the old timer and restarts the loop,
+    // which will immediately detect status=processing and poll every 500ms
+    setPollTrigger((t) => t + 1)
   }
 
   return (
@@ -101,7 +113,7 @@ export default function KeywordReportsPage() {
             <ReportsList
               reports={reports}
               onViewReport={handleViewReport}
-              onReportUpdated={() => fetchReports(false)}
+              onReportUpdated={() => setPollTrigger((t) => t + 1)}
               onNewReport={() => setIsModalOpen(true)}
               showArchived={showArchived}
             />
