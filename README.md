@@ -1,36 +1,60 @@
 # Keyword Planner Application
 
-A full-stack application for keyword research using Google Ads Keyword Planner API with historical data tracking in BigQuery.
+A full-stack application for keyword research using Google Ads Keyword Planner API with hybrid Firestore + BigQuery storage.
 
 ## Architecture
 
 ```
 gap_analysis_v2/
-├── backend/          # FastAPI backend with BigQuery integration
-├── frontend/         # React + Tailwind CSS frontend
+├── backend/          # FastAPI backend with Firestore + BigQuery
+├── frontend/         # React + Tailwind CSS frontend  
 ├── terraform/        # Infrastructure as Code (GCP resources)
 └── scripts/          # Utility scripts for Google Ads
 ```
+
+### Hybrid Data Architecture
+
+```
+┌─────────────────────────────────────────┐
+│ Metadata Layer (Firestore)              │
+│ - Run metadata (CRUD-friendly)          │
+│ - Instant updates ✅                     │
+│ - No streaming buffer delays            │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ Analytics Layer (BigQuery)               │
+│ - Keyword results (append-only)          │
+│ - Optimized for data warehouse           │
+│ - Query millions of keywords             │
+└─────────────────────────────────────────┘
+```
+
+**Why Hybrid?**
+- **Firestore** for metadata: Instant archive/unarchive (no BigQuery streaming buffer delays)
+- **BigQuery** for keywords: Optimized for large-scale analytics and SQL queries
 
 ## Features
 
 ### Backend (FastAPI)
 - **Keyword Research API**: Fetch keyword ideas from Google Ads Keyword Planner
-- **BigQuery Integration**: Automatically saves all research runs and results
-- **CRUD Operations**: List, view, and archive previous runs
+- **Hybrid Storage**: Firestore for metadata, BigQuery for keyword data
+- **Instant CRUD**: Archive/unarchive runs immediately (no delays)
 - **Configuration Management**: YAML-based config with environment variables
 
 ### Frontend (React + Tailwind)
-- **Modern UI**: Clean, responsive interface with Tailwind CSS
-- **Real-time Analysis**: Fetch and display keyword data
+- **Unified Dashboard**: Search + history in one view
+- **Real-time Management**: Archive and view runs instantly
 - **Data Visualization**: Summary cards and detailed keyword tables
-- **History Management**: View and manage previous research runs
+- **Component Architecture**: Clean, reusable React components
 
 ### Infrastructure (Terraform)
 - **Automated Provisioning**: Complete GCP infrastructure setup
-- **BigQuery Tables**: Two tables for runs metadata and keyword results
+- **Firestore Database**: For run metadata (instant CRUD)
+- **BigQuery Table**: For keyword results (analytics)
 - **Service Account**: Secure access with minimal permissions
-- **Time Partitioning**: Efficient data storage and querying
+- **Time Partitioning**: Efficient BigQuery storage and querying
 
 ## Prerequisites
 
@@ -89,7 +113,7 @@ Frontend will be available at `http://localhost:5173`
 ## API Endpoints
 
 ### POST `/keyword-planner`
-Fetch keywords for URLs and save to BigQuery
+Fetch keywords for URLs and save to Firestore + BigQuery
 ```json
 {
   "urls": ["https://example.com"]
@@ -99,31 +123,18 @@ Fetch keywords for URLs and save to BigQuery
 ### GET `/runs`
 List all research runs (non-archived by default)
 - Query params: `status` (completed/failed/archived), `limit` (default: 100)
-- Returns `is_archivable` and `minutes_until_archivable` for each run
-
-**Response includes archivability tracking:**
-```json
-{
-  "runs": [{
-    "run_id": "...",
-    "created_at": "2026-02-24T05:45:11+00:00",
-    "status": "completed",
-    "is_archivable": false,
-    "minutes_until_archivable": 84
-  }]
-}
-```
 
 ### GET `/runs/{run_id}/keywords`
-Get all keywords for a specific run
+Get all keywords for a specific run (metadata from Firestore, keywords from BigQuery)
 
 ### PATCH `/runs/{run_id}/archive`
-Archive a run (soft delete)
-- **Note:** Due to BigQuery streaming buffer, runs can only be archived 90+ minutes after creation
-- Use `is_archivable` field from `/runs` endpoint to check availability
+Archive a run (instant update in Firestore)
+
+### PATCH `/runs/{run_id}/unarchive`
+Unarchive a run (instant update in Firestore)
 
 ### GET `/health`
-Health check for API and BigQuery connection
+Health check for Google Ads, BigQuery, and Firestore connections
 
 ## Configuration
 
@@ -136,7 +147,6 @@ gcp:
 bigquery:
   dataset: "keyword_planner_data"
   tables:
-    runs: "keyword_runs"
     results: "keyword_results"
 ```
 
@@ -147,16 +157,20 @@ GCP_SERVICE_ACCOUNT_KEY_PATH=./service-account-key.json
 
 ## Data Schema
 
-### `keyword_runs` Table
-- `run_id` (STRING): Unique identifier (UUID)
-- `created_at` (TIMESTAMP): Run timestamp
-- `status` (STRING): completed/failed/archived
-- `urls` (REPEATED STRING): Analyzed URLs
-- `total_keywords_found` (INTEGER): Total keywords
-- `error_message` (STRING): Error if failed
+### Firestore Collection: `runs`
+```json
+{
+  "run_id": "uuid",
+  "created_at": "timestamp",
+  "status": "completed|failed|archived",
+  "urls": ["url1", "url2"],
+  "total_keywords_found": 1043,
+  "error_message": null
+}
+```
 
-### `keyword_results` Table
-- `run_id` (STRING): Foreign key to runs
+### BigQuery Table: `keyword_results`
+- `run_id` (STRING): Foreign key to Firestore runs
 - `created_at` (TIMESTAMP): Keyword fetch timestamp
 - `source_url` (STRING): Source URL
 - `keyword_text` (STRING): Keyword
@@ -168,32 +182,24 @@ GCP_SERVICE_ACCOUNT_KEY_PATH=./service-account-key.json
 
 ## Development
 
-### Running Tests
-```bash
-# Backend
-cd backend
-pytest
-
-# Frontend
-cd frontend
-npm test
-```
-
 ### Code Structure
 
 **Backend:**
-- `api.py` - Main FastAPI application
+- `api.py` - Main FastAPI application with Firestore + BigQuery
 - `config.yaml` - Configuration
 - `requirements.txt` - Python dependencies
 
 **Frontend:**
-- `src/App.jsx` - Main React component
-- `src/index.css` - Tailwind CSS imports
+- `src/App.jsx` - Main dashboard component
+- `src/components/SearchForm.jsx` - URL input form
+- `src/components/RunsList.jsx` - Runs list with archive actions
+- `src/components/KeywordTable.jsx` - Reusable keyword table
 - `vite.config.js` - Vite configuration with proxy
 
 **Terraform:**
 - `main.tf` - Provider and API enablement
-- `bigquery.tf` - Dataset and tables
+- `firestore.tf` - Firestore database configuration
+- `bigquery.tf` - BigQuery dataset and tables
 - `service_accounts.tf` - Service account and IAM
 - `outputs.tf` - Terraform outputs
 
@@ -213,21 +219,14 @@ cd terraform
 terraform destroy
 ```
 
-⚠️ This will **permanently delete** all data in BigQuery!
-
-## Important Notes
-
-### BigQuery Streaming Buffer
-
-Due to BigQuery's streaming buffer (30-90 minutes), newly created runs cannot be immediately archived. The API handles this by:
-
-- Calculating archivability based on run age (>90 minutes)
-- Returning `is_archivable` boolean and `minutes_until_archivable` in `/runs` endpoint
-- Frontend can poll this endpoint to enable archive functionality when ready
-
-**Recommendation:** Poll `/runs` endpoint periodically (e.g., every 5 minutes) to update UI state for archive buttons.
+⚠️ This will **permanently delete** all data in Firestore and BigQuery!
 
 ## Troubleshooting
+
+### Firestore Connection Issues
+1. Verify service account key path in `.env`
+2. Check IAM permissions (roles/datastore.user)
+3. Ensure Firestore API is enabled
 
 ### BigQuery Connection Issues
 1. Verify service account key path in `.env`
