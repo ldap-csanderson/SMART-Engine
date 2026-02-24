@@ -113,6 +113,7 @@ function App() {
             runs={runs}
             onViewRun={handleViewRun}
             onRunUpdated={fetchRuns}
+            onNewRun={() => setIsModalOpen(true)}
             showArchived={showArchived}
           />
         </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived = false }) {
+export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived = false, onNewRun }) {
   const [actionLoading, setActionLoading] = useState({})
 
   const handleArchive = async (runId) => {
@@ -35,8 +35,20 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
 
   if (runs.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
-        {showArchived ? 'No archived runs' : 'No runs yet - create your first search above'}
+      <div className="bg-white rounded-lg shadow p-12 text-center">
+        {showArchived ? (
+          <p className="text-gray-500">No archived runs</p>
+        ) : (
+          <div className="flex flex-col items-center">
+            <p className="text-gray-500 mb-6">No runs yet - create your first search</p>
+            <button
+              onClick={onNewRun}
+              className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
+            >
+              + New Run
+            </button>
+          </div>
+        )}
       </div>
     )
   }
