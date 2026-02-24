@@ -63,17 +63,6 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
               <div className="text-sm text-gray-600 space-y-1">
                 <p>Created: {new Date(run.created_at).toLocaleString()}</p>
                 <p>Keywords found: {run.total_keywords_found.toLocaleString()}</p>
-                
-                {!run.is_archivable && run.minutes_until_archivable !== null && (
-                  <p className="text-amber-600">
-                    ⏳ Archivable in {run.minutes_until_archivable} minutes
-                  </p>
-                )}
-                {run.is_archivable && run.status !== 'archived' && (
-                  <p className="text-green-600">
-                    ✓ Ready to archive
-                  </p>
-                )}
               </div>
             </div>
             
@@ -88,9 +77,8 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
               {run.status !== 'archived' ? (
                 <button
                   onClick={() => handleArchive(run.run_id)}
-                  disabled={!run.is_archivable || actionLoading[run.run_id]}
+                  disabled={actionLoading[run.run_id]}
                   className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={!run.is_archivable ? `Available in ${run.minutes_until_archivable} minutes` : 'Archive this run'}
                 >
                   {actionLoading[run.run_id] ? 'Archiving...' : 'Archive'}
                 </button>
