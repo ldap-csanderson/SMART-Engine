@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReportsList from '../components/ReportsList'
 import NewReportModal from '../components/NewReportModal'
@@ -9,6 +9,12 @@ export default function KeywordReportsPage() {
   const [loading, setLoading] = useState(true)
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const reportsRef = useRef(reports)
+
+  // Keep ref in sync so setTimeout callbacks can read current state
+  useEffect(() => {
+    reportsRef.current = reports
+  }, [reports])
 
   const fetchReports = async (isInitial = false) => {
     if (isInitial) setLoading(true)
@@ -17,7 +23,16 @@ export default function KeywordReportsPage() {
       const url = status ? `/api/keyword-reports?status=${status}` : '/api/keyword-reports'
       const response = await fetch(url)
       const data = await response.json()
-      setReports(data.reports || [])
+      const serverReports = data.reports || []
+
+      // Preserve any temp "processing" entries that haven't landed in Firestore yet
+      setReports((prev) => {
+        const serverIds = new Set(serverReports.map((r) => r.report_id))
+        const survivingTemp = prev.filter(
+          (r) => r.report_id.startsWith('temp-') && !serverIds.has(r.report_id)
+        )
+        return [...survivingTemp, ...serverReports]
+      })
     } catch (err) {
       console.error('Failed to fetch reports:', err)
     } finally {
@@ -25,11 +40,25 @@ export default function KeywordReportsPage() {
     }
   }
 
-  // Poll for updates every 30 seconds
+  // Poll — aggressively (5s) while there are pending temp entries, otherwise every 30s
   useEffect(() => {
     fetchReports(true)
-    const interval = setInterval(() => fetchReports(false), 30000)
-    return () => clearInterval(interval)
+
+    const tick = () => {
+      const hasPending = reportsRef.current.some((r) => r.report_id.startsWith('temp-'))
+      const delay = hasPending ? 5_000 : 30_000
+      timerRef.current = setTimeout(async () => {
+        await fetchReports(false)
+        tick()
+      }, delay)
+    }
+
+    const timerRef = { current: null }
+    tick()
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
   }, [showArchived])
 
   const handleViewReport = (reportId) => {
@@ -37,7 +66,7 @@ export default function KeywordReportsPage() {
   }
 
   const handleNewReportSubmit = (reportData) => {
-    // Add optimistic "processing" report at the top
+    // Add optimistic "processing" entry — it will be preserved until the real one arrives
     const processingReport = {
       report_id: 'temp-' + Date.now(),
       name: reportData.name || `Report ${new Date().toLocaleString()}`,
@@ -48,10 +77,7 @@ export default function KeywordReportsPage() {
       error_message: null,
     }
 
-    setReports([processingReport, ...reports])
-
-    // Refresh to get actual results after a short delay
-    setTimeout(() => fetchReports(false), 2000)
+    setReports((prev) => [processingReport, ...prev])
   }
 
   return (

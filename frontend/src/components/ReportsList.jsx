@@ -85,7 +85,7 @@ export default function ReportsList({ reports, onViewReport, onReportUpdated, sh
                 onClick={() => onViewReport(report.report_id)}
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
-                View
+                View Results
               </button>
 
               {report.status !== 'archived' ? (
