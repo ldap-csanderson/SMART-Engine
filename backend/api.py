@@ -74,6 +74,8 @@ class Run(BaseModel):
     urls: List[str]
     total_keywords_found: int
     error_message: Optional[str] = None
+    is_archivable: bool = False
+    minutes_until_archivable: Optional[int] = None
 
 
 class RunsListResponse(BaseModel):
@@ -352,14 +354,27 @@ def list_runs(status: Optional[str] = None, limit: int = 100):
         results = query_job.result()
         
         runs = []
+        current_time = datetime.now(timezone.utc)
+        
         for row in results:
+            # Calculate if run is archivable (>90 minutes old to clear streaming buffer)
+            created_time = row.created_at
+            if created_time.tzinfo is None:
+                created_time = created_time.replace(tzinfo=timezone.utc)
+            
+            age_minutes = (current_time - created_time).total_seconds() / 60
+            is_archivable = age_minutes >= 90
+            minutes_until_archivable = max(0, int(90 - age_minutes)) if not is_archivable else 0
+            
             runs.append(Run(
                 run_id=row.run_id,
                 created_at=row.created_at.isoformat(),
                 status=row.status,
                 urls=row.urls,
                 total_keywords_found=row.total_keywords_found,
-                error_message=row.error_message
+                error_message=row.error_message,
+                is_archivable=is_archivable,
+                minutes_until_archivable=minutes_until_archivable if not is_archivable else None
             ))
         
         return RunsListResponse(runs=runs, total_count=len(runs))
