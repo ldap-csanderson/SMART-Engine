@@ -89,7 +89,7 @@ export default function FiltersPage() {
                       )}
                     </div>
                     {filter.text && (
-                      <p className="text-sm text-gray-600 line-clamp-2 mt-1">{filter.text}</p>
+                      <p className="text-sm text-gray-600 line-clamp-3 mt-1">{filter.text}</p>
                     )}
                     <p className="text-xs text-gray-400 mt-2">
                       Created: {new Date(filter.created_at).toLocaleString()}
