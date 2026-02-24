@@ -339,18 +339,27 @@ def list_runs(status: Optional[str] = None, limit: int = 100):
         raise HTTPException(status_code=503, detail="Firestore client not initialized")
     
     try:
-        # Build query
-        query = db.collection("runs").order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
-        
-        # Filter by status
-        if status:
-            query = query.where(filter=firestore.FieldFilter("status", "==", status))
-        
+        # Get all runs ordered by created_at (client-side filtering to avoid composite index)
+        query = db.collection("runs").order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit * 2)
         docs = query.stream()
         
         runs = []
         for doc in docs:
             data = doc.to_dict()
+            
+            # Client-side status filtering
+            if status:
+                # Filter by specific status
+                if data.get("status") != status:
+                    continue
+            else:
+                # Default: show only non-archived
+                if data.get("status") == "archived":
+                    continue
+            
+            # Stop if we've reached the limit
+            if len(runs) >= limit:
+                break
             # Convert Firestore timestamp to ISO string
             created_at = data["created_at"]
             if hasattr(created_at, 'isoformat'):
