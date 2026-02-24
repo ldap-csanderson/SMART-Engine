@@ -99,12 +99,28 @@ Fetch keywords for URLs and save to BigQuery
 ### GET `/runs`
 List all research runs (non-archived by default)
 - Query params: `status` (completed/failed/archived), `limit` (default: 100)
+- Returns `is_archivable` and `minutes_until_archivable` for each run
+
+**Response includes archivability tracking:**
+```json
+{
+  "runs": [{
+    "run_id": "...",
+    "created_at": "2026-02-24T05:45:11+00:00",
+    "status": "completed",
+    "is_archivable": false,
+    "minutes_until_archivable": 84
+  }]
+}
+```
 
 ### GET `/runs/{run_id}/keywords`
 Get all keywords for a specific run
 
 ### PATCH `/runs/{run_id}/archive`
 Archive a run (soft delete)
+- **Note:** Due to BigQuery streaming buffer, runs can only be archived 90+ minutes after creation
+- Use `is_archivable` field from `/runs` endpoint to check availability
 
 ### GET `/health`
 Health check for API and BigQuery connection
@@ -198,6 +214,62 @@ terraform destroy
 ```
 
 ⚠️ This will **permanently delete** all data in BigQuery!
+
+## BigQuery Streaming Buffer & Archiving
+
+### Understanding the Limitation
+
+BigQuery uses a streaming buffer for recently inserted data (30-90 minutes). During this period:
+- Data is queryable immediately ✅
+- UPDATE/DELETE operations are not supported ❌
+
+### Archivability Tracking
+
+The API automatically calculates when runs can be archived:
+
+```javascript
+// Frontend polling example
+async function checkArchivability() {
+  const response = await fetch('/api/runs');
+  const data = await response.json();
+  
+  data.runs.forEach(run => {
+    if (run.is_archivable) {
+      // Enable archive button
+      enableArchiveButton(run.run_id);
+    } else {
+      // Show: "Archivable in 84 minutes"
+      showCountdown(run.run_id, run.minutes_until_archivable);
+    }
+  });
+}
+
+// Poll every 5 minutes
+setInterval(checkArchivability, 5 * 60 * 1000);
+```
+
+### Smart Polling Strategy
+
+```javascript
+function pollRuns() {
+  fetch('/api/runs')
+    .then(r => r.json())
+    .then(data => {
+      const nonArchivable = data.runs.filter(r => !r.is_archivable);
+      
+      if (nonArchivable.length === 0) {
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      // Poll again just after soonest run becomes archivable
+      const soonestMinutes = Math.min(
+        ...nonArchivable.map(r => r.minutes_until_archivable)
+      );
+      setTimeout(pollRuns, (soonestMinutes + 1) * 60 * 1000);
+    });
+}
+```
 
 ## Troubleshooting
 
