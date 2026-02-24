@@ -10,6 +10,8 @@ export default function KeywordReportsPage() {
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const reportsRef = useRef(reports)
+  // How many real (non-temp) reports existed before the last optimistic add
+  const baselineCountRef = useRef(0)
 
   // Keep ref in sync so setTimeout callbacks can read current state
   useEffect(() => {
@@ -25,8 +27,20 @@ export default function KeywordReportsPage() {
       const data = await response.json()
       const serverReports = data.reports || []
 
-      // Preserve any temp "processing" entries that haven't landed in Firestore yet
       setReports((prev) => {
+        const hasTempEntries = prev.some((r) => r.report_id.startsWith('temp-'))
+
+        if (!hasTempEntries) {
+          // No pending optimistic entries — just use server data
+          return serverReports
+        }
+
+        // Server count grew past our baseline → new report arrived, drop all temps
+        if (serverReports.length > baselineCountRef.current) {
+          return serverReports
+        }
+
+        // Still waiting — keep temp entries alongside existing server results
         const serverIds = new Set(serverReports.map((r) => r.report_id))
         const survivingTemp = prev.filter(
           (r) => r.report_id.startsWith('temp-') && !serverIds.has(r.report_id)
@@ -40,9 +54,11 @@ export default function KeywordReportsPage() {
     }
   }
 
-  // Poll — aggressively (5s) while there are pending temp entries, otherwise every 30s
+  // Adaptive polling: 500ms while pending, 30s otherwise
   useEffect(() => {
     fetchReports(true)
+
+    const timerRef = { current: null }
 
     const tick = () => {
       const hasPending = reportsRef.current.some((r) => r.report_id.startsWith('temp-'))
@@ -53,7 +69,6 @@ export default function KeywordReportsPage() {
       }, delay)
     }
 
-    const timerRef = { current: null }
     tick()
 
     return () => {
@@ -66,7 +81,11 @@ export default function KeywordReportsPage() {
   }
 
   const handleNewReportSubmit = (reportData) => {
-    // Add optimistic "processing" entry — it will be preserved until the real one arrives
+    // Record how many real reports exist right now so we know when the new one lands
+    baselineCountRef.current = reportsRef.current.filter(
+      (r) => !r.report_id.startsWith('temp-')
+    ).length
+
     const processingReport = {
       report_id: 'temp-' + Date.now(),
       name: reportData.name || `Report ${new Date().toLocaleString()}`,
