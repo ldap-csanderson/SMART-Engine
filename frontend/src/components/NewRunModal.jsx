@@ -47,8 +47,12 @@ export default function NewRunModal({ isOpen, onClose, onSubmit }) {
 
       const data = await response.json()
       
-      // Call callback and close modal
-      if (onSubmit) onSubmit(data)
+      // Call callback with name and URLs for optimistic UI
+      if (onSubmit) onSubmit({
+        name: name.trim(),
+        urls: urlList,
+        apiResponse: data
+      })
       
       // Reset and close
       setName('')

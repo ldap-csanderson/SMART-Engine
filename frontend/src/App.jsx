@@ -64,9 +64,23 @@ function App() {
     }
   }
 
-  const handleNewRunSubmit = (data) => {
-    // Refresh runs list after new run created
-    fetchRuns()
+  const handleNewRunSubmit = async (runData) => {
+    // Add optimistic "processing" run at the top
+    const processingRun = {
+      run_id: 'temp-' + Date.now(),
+      name: runData.name || `Run ${new Date().toLocaleString()}`,
+      created_at: new Date().toISOString(),
+      status: 'processing',
+      urls: runData.urls,
+      total_keywords_found: 0,
+      error_message: null
+    }
+    
+    // Add to top of list immediately
+    setRuns([processingRun, ...runs])
+    
+    // Refresh to get actual results
+    setTimeout(fetchRuns, 2000)
   }
 
   return (
