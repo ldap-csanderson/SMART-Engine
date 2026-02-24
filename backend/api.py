@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
-from google.cloud import bigquery
+from google.cloud import bigquery, firestore
 import time
 import os
 import yaml
@@ -32,7 +32,6 @@ MAX_RETRIES = config["api"]["max_retries"]
 RETRY_DELAY = config["api"]["retry_delay_seconds"]
 PROJECT_ID = config["gcp"]["project_id"]
 DATASET_ID = config["bigquery"]["dataset"]
-RUNS_TABLE = config["bigquery"]["tables"]["runs"]
 RESULTS_TABLE = config["bigquery"]["tables"]["results"]
 
 # Initialize Google Ads client
@@ -43,9 +42,8 @@ except Exception as e:
     print(f"❌ Failed to load Google Ads client: {e}")
     ga_client = None
 
-# Initialize BigQuery client
+# Initialize BigQuery client (for keyword data only)
 try:
-    # Load credentials from environment variable
     credentials_path = os.getenv("GCP_SERVICE_ACCOUNT_KEY_PATH")
     if credentials_path:
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
@@ -55,6 +53,14 @@ try:
 except Exception as e:
     print(f"❌ Failed to initialize BigQuery client: {e}")
     bq_client = None
+
+# Initialize Firestore client (for run metadata)
+try:
+    db = firestore.Client(project=PROJECT_ID)
+    print(f"✅ Connected to Firestore: {PROJECT_ID}")
+except Exception as e:
+    print(f"❌ Failed to initialize Firestore client: {e}")
+    db = None
 
 
 class URLRequest(BaseModel):
@@ -74,8 +80,6 @@ class Run(BaseModel):
     urls: List[str]
     total_keywords_found: int
     error_message: Optional[str] = None
-    is_archivable: bool = False
-    minutes_until_archivable: Optional[int] = None
 
 
 class RunsListResponse(BaseModel):
@@ -83,31 +87,26 @@ class RunsListResponse(BaseModel):
     total_count: int
 
 
-def insert_run_to_bq(run_id: str, urls: List[str], total_keywords: int, status: str = "completed", error_message: Optional[str] = None):
-    """Insert a new run record into BigQuery"""
-    if not bq_client:
-        print("⚠️ BigQuery client not initialized, skipping insert")
+def insert_run_to_firestore(run_id: str, urls: List[str], total_keywords: int, status: str = "completed", error_message: Optional[str] = None):
+    """Insert a new run record into Firestore"""
+    if not db:
+        print("⚠️ Firestore client not initialized, skipping insert")
         return
     
-    table_id = f"{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}"
-    
-    rows_to_insert = [{
+    run_data = {
         "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": firestore.SERVER_TIMESTAMP,
         "status": status,
         "urls": urls,
         "total_keywords_found": total_keywords,
         "error_message": error_message
-    }]
+    }
     
     try:
-        errors = bq_client.insert_rows_json(table_id, rows_to_insert)
-        if errors:
-            print(f"❌ BigQuery insert errors for run: {errors}")
-        else:
-            print(f"✅ Inserted run {run_id} to BigQuery")
+        db.collection("runs").document(run_id).set(run_data)
+        print(f"✅ Inserted run {run_id} to Firestore")
     except Exception as e:
-        print(f"❌ Failed to insert run to BigQuery: {e}")
+        print(f"❌ Failed to insert run to Firestore: {e}")
 
 
 def insert_keywords_to_bq(run_id: str, url: str, keywords: List[Dict[str, Any]]):
@@ -230,6 +229,7 @@ def read_root():
             "/runs": "GET - List all runs",
             "/runs/{run_id}/keywords": "GET - Get keywords for a run",
             "/runs/{run_id}/archive": "PATCH - Archive a run",
+            "/runs/{run_id}/unarchive": "PATCH - Unarchive a run",
             "/health": "GET - Check API health"
         }
     }
@@ -242,17 +242,20 @@ def health_check():
         raise HTTPException(status_code=503, detail="Google Ads client not initialized")
     if bq_client is None:
         raise HTTPException(status_code=503, detail="BigQuery client not initialized")
+    if db is None:
+        raise HTTPException(status_code=503, detail="Firestore client not initialized")
     return {
         "status": "healthy",
         "google_ads_connected": True,
-        "bigquery_connected": True
+        "bigquery_connected": True,
+        "firestore_connected": True
     }
 
 
 @app.post("/keyword-planner", response_model=KeywordPlannerResponse)
 def get_keyword_planner_data(request: URLRequest):
     """
-    Fetch keyword planner data for multiple URLs and save to BigQuery
+    Fetch keyword planner data for multiple URLs and save to Firestore + BigQuery
     
     Args:
         request: URLRequest containing a list of URLs to analyze
@@ -305,8 +308,8 @@ def get_keyword_planner_data(request: URLRequest):
         "keywords_per_url": {url: len(keywords) for url, keywords in all_results.items()}
     }
     
-    # Insert run metadata into BigQuery
-    insert_run_to_bq(run_id, request.urls, total_keywords, status="completed")
+    # Insert run metadata into Firestore
+    insert_run_to_firestore(run_id, request.urls, total_keywords, status="completed")
     
     print("\n" + "=" * 60)
     print("SUMMARY")
@@ -326,55 +329,45 @@ def get_keyword_planner_data(request: URLRequest):
 @app.get("/runs", response_model=RunsListResponse)
 def list_runs(status: Optional[str] = None, limit: int = 100):
     """
-    List all keyword research runs
+    List all keyword research runs from Firestore
     
     Args:
         status: Filter by status (completed, failed, archived). If None, shows all non-archived.
         limit: Maximum number of runs to return
     """
-    if not bq_client:
-        raise HTTPException(status_code=503, detail="BigQuery client not initialized")
-    
-    # Default to showing only active runs (not archived)
-    if status is None:
-        where_clause = "WHERE status != 'archived'"
-    else:
-        where_clause = f"WHERE status = '{status}'"
-    
-    query = f"""
-        SELECT run_id, created_at, status, urls, total_keywords_found, error_message
-        FROM `{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}`
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT {limit}
-    """
+    if not db:
+        raise HTTPException(status_code=503, detail="Firestore client not initialized")
     
     try:
-        query_job = bq_client.query(query)
-        results = query_job.result()
+        # Build query
+        query = db.collection("runs").order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
+        
+        # Filter by status
+        if status:
+            query = query.where("status", "==", status)
+        elif status is None:
+            # Default: show all non-archived
+            query = query.where("status", "!=", "archived")
+        
+        docs = query.stream()
         
         runs = []
-        current_time = datetime.now(timezone.utc)
-        
-        for row in results:
-            # Calculate if run is archivable (>90 minutes old to clear streaming buffer)
-            created_time = row.created_at
-            if created_time.tzinfo is None:
-                created_time = created_time.replace(tzinfo=timezone.utc)
-            
-            age_minutes = (current_time - created_time).total_seconds() / 60
-            is_archivable = age_minutes >= 90
-            minutes_until_archivable = max(0, int(90 - age_minutes)) if not is_archivable else 0
+        for doc in docs:
+            data = doc.to_dict()
+            # Convert Firestore timestamp to ISO string
+            created_at = data["created_at"]
+            if hasattr(created_at, 'isoformat'):
+                created_at_str = created_at.isoformat()
+            else:
+                created_at_str = str(created_at)
             
             runs.append(Run(
-                run_id=row.run_id,
-                created_at=row.created_at.isoformat(),
-                status=row.status,
-                urls=row.urls,
-                total_keywords_found=row.total_keywords_found,
-                error_message=row.error_message,
-                is_archivable=is_archivable,
-                minutes_until_archivable=minutes_until_archivable if not is_archivable else None
+                run_id=data["run_id"],
+                created_at=created_at_str,
+                status=data["status"],
+                urls=data["urls"],
+                total_keywords_found=data["total_keywords_found"],
+                error_message=data.get("error_message")
             ))
         
         return RunsListResponse(runs=runs, total_count=len(runs))
@@ -385,38 +378,30 @@ def list_runs(status: Optional[str] = None, limit: int = 100):
 
 @app.get("/runs/{run_id}/keywords")
 def get_run_keywords(run_id: str):
-    """Get all keywords for a specific run"""
+    """Get all keywords for a specific run (metadata from Firestore, keywords from BigQuery)"""
+    if not db:
+        raise HTTPException(status_code=503, detail="Firestore client not initialized")
     if not bq_client:
         raise HTTPException(status_code=503, detail="BigQuery client not initialized")
     
-    # First get run metadata
-    run_query = f"""
-        SELECT run_id, created_at, status, urls, total_keywords_found
-        FROM `{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}`
-        WHERE run_id = '{run_id}'
-        LIMIT 1
-    """
-    
-    # Get keywords
-    keywords_query = f"""
-        SELECT source_url, keyword_text, avg_monthly_searches, competition, 
-               competition_index, low_top_of_page_bid_usd, high_top_of_page_bid_usd
-        FROM `{PROJECT_ID}.{DATASET_ID}.{RESULTS_TABLE}`
-        WHERE run_id = '{run_id}'
-        ORDER BY source_url, avg_monthly_searches DESC
-    """
-    
     try:
-        # Get run info
-        run_job = bq_client.query(run_query)
-        run_results = list(run_job.result())
+        # Get run metadata from Firestore
+        run_doc = db.collection("runs").document(run_id).get()
         
-        if not run_results:
+        if not run_doc.exists:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
         
-        run = run_results[0]
+        run_data = run_doc.to_dict()
         
-        # Get keywords
+        # Get keywords from BigQuery
+        keywords_query = f"""
+            SELECT source_url, keyword_text, avg_monthly_searches, competition, 
+                   competition_index, low_top_of_page_bid_usd, high_top_of_page_bid_usd
+            FROM `{PROJECT_ID}.{DATASET_ID}.{RESULTS_TABLE}`
+            WHERE run_id = '{run_id}'
+            ORDER BY source_url, avg_monthly_searches DESC
+        """
+        
         keywords_job = bq_client.query(keywords_query)
         keywords_results = keywords_job.result()
         
@@ -436,12 +421,19 @@ def get_run_keywords(run_id: str):
                 "high_top_of_page_bid_usd": row.high_top_of_page_bid_usd,
             })
         
+        # Convert timestamp
+        created_at = run_data["created_at"]
+        if hasattr(created_at, 'isoformat'):
+            created_at_str = created_at.isoformat()
+        else:
+            created_at_str = str(created_at)
+        
         return {
-            "run_id": run.run_id,
-            "created_at": run.created_at.isoformat(),
-            "status": run.status,
-            "urls": run.urls,
-            "total_keywords_found": run.total_keywords_found,
+            "run_id": run_data["run_id"],
+            "created_at": created_at_str,
+            "status": run_data["status"],
+            "urls": run_data["urls"],
+            "total_keywords_found": run_data["total_keywords_found"],
             "keywords": keywords_by_url
         }
     
@@ -453,44 +445,48 @@ def get_run_keywords(run_id: str):
 
 @app.patch("/runs/{run_id}/archive")
 def archive_run(run_id: str):
-    """Archive a run (soft delete)"""
-    if not bq_client:
-        raise HTTPException(status_code=503, detail="BigQuery client not initialized")
-    
-    query = f"""
-        UPDATE `{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}`
-        SET status = 'archived'
-        WHERE run_id = '{run_id}' AND status != 'archived'
-    """
+    """Archive a run (instant update in Firestore)"""
+    if not db:
+        raise HTTPException(status_code=503, detail="Firestore client not initialized")
     
     try:
-        query_job = bq_client.query(query)
-        query_job.result()
+        run_ref = db.collection("runs").document(run_id)
+        run_doc = run_ref.get()
+        
+        if not run_doc.exists:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        
+        run_ref.update({"status": "archived"})
+        print(f"✅ Archived run {run_id} in Firestore")
         
         return {"message": f"Run {run_id} archived successfully", "run_id": run_id}
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to archive run: {str(e)}")
 
 
 @app.patch("/runs/{run_id}/unarchive")
 def unarchive_run(run_id: str):
-    """Unarchive a run (restore from archived state)"""
-    if not bq_client:
-        raise HTTPException(status_code=503, detail="BigQuery client not initialized")
-    
-    query = f"""
-        UPDATE `{PROJECT_ID}.{DATASET_ID}.{RUNS_TABLE}`
-        SET status = 'completed'
-        WHERE run_id = '{run_id}' AND status = 'archived'
-    """
+    """Unarchive a run (instant update in Firestore)"""
+    if not db:
+        raise HTTPException(status_code=503, detail="Firestore client not initialized")
     
     try:
-        query_job = bq_client.query(query)
-        query_job.result()
+        run_ref = db.collection("runs").document(run_id)
+        run_doc = run_ref.get()
+        
+        if not run_doc.exists:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        
+        run_ref.update({"status": "completed"})
+        print(f"✅ Unarchived run {run_id} in Firestore")
         
         return {"message": f"Run {run_id} unarchived successfully", "run_id": run_id}
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to unarchive run: {str(e)}")
 
