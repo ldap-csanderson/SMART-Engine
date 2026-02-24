@@ -75,7 +75,7 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
               
               <div className="text-sm text-gray-600 space-y-1">
                 <p>Created: {new Date(run.created_at).toLocaleString()}</p>
-                <p>Keywords found: {run.total_keywords_found.toLocaleString()}</p>
+                <p>URLs: {run.urls?.length || 0} | Keywords: {run.total_keywords_found.toLocaleString()}</p>
               </div>
             </div>
             
