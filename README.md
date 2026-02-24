@@ -215,61 +215,17 @@ terraform destroy
 
 ⚠️ This will **permanently delete** all data in BigQuery!
 
-## BigQuery Streaming Buffer & Archiving
+## Important Notes
 
-### Understanding the Limitation
+### BigQuery Streaming Buffer
 
-BigQuery uses a streaming buffer for recently inserted data (30-90 minutes). During this period:
-- Data is queryable immediately ✅
-- UPDATE/DELETE operations are not supported ❌
+Due to BigQuery's streaming buffer (30-90 minutes), newly created runs cannot be immediately archived. The API handles this by:
 
-### Archivability Tracking
+- Calculating archivability based on run age (>90 minutes)
+- Returning `is_archivable` boolean and `minutes_until_archivable` in `/runs` endpoint
+- Frontend can poll this endpoint to enable archive functionality when ready
 
-The API automatically calculates when runs can be archived:
-
-```javascript
-// Frontend polling example
-async function checkArchivability() {
-  const response = await fetch('/api/runs');
-  const data = await response.json();
-  
-  data.runs.forEach(run => {
-    if (run.is_archivable) {
-      // Enable archive button
-      enableArchiveButton(run.run_id);
-    } else {
-      // Show: "Archivable in 84 minutes"
-      showCountdown(run.run_id, run.minutes_until_archivable);
-    }
-  });
-}
-
-// Poll every 5 minutes
-setInterval(checkArchivability, 5 * 60 * 1000);
-```
-
-### Smart Polling Strategy
-
-```javascript
-function pollRuns() {
-  fetch('/api/runs')
-    .then(r => r.json())
-    .then(data => {
-      const nonArchivable = data.runs.filter(r => !r.is_archivable);
-      
-      if (nonArchivable.length === 0) {
-        clearInterval(pollInterval);
-        return;
-      }
-      
-      // Poll again just after soonest run becomes archivable
-      const soonestMinutes = Math.min(
-        ...nonArchivable.map(r => r.minutes_until_archivable)
-      );
-      setTimeout(pollRuns, (soonestMinutes + 1) * 60 * 1000);
-    });
-}
-```
+**Recommendation:** Poll `/runs` endpoint periodically (e.g., every 5 minutes) to update UI state for archive buttons.
 
 ## Troubleshooting
 
