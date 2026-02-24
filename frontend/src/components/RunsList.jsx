@@ -40,13 +40,13 @@ export default function RunsList({ runs, onViewRun, onRunUpdated, showArchived =
           <p className="text-gray-500">No archived runs</p>
         ) : (
           <div className="flex flex-col items-center">
-            <p className="text-gray-500 mb-6">No runs yet - create your first search</p>
             <button
               onClick={onNewRun}
-              className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
+              className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm mb-4"
             >
               + New Run
             </button>
+            <p className="text-gray-500">No runs yet - create your first search</p>
           </div>
         )}
       </div>
