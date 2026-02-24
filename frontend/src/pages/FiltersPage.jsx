@@ -5,21 +5,25 @@ import NewFilterModal from '../components/NewFilterModal'
 export default function FiltersPage() {
   const navigate = useNavigate()
   const [filters, setFilters] = useState([])
+  const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState({})
 
-  const fetchFilters = async () => {
+  const fetchFilters = async (isInitial = false) => {
+    if (isInitial) setLoading(true)
     try {
       const response = await fetch('/api/filters')
       const data = await response.json()
       setFilters(data.filters || [])
     } catch (err) {
       console.error('Failed to fetch filters:', err)
+    } finally {
+      if (isInitial) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchFilters()
+    fetchFilters(true)
   }, [])
 
   const handleDelete = async (filterId, filterName) => {
@@ -59,7 +63,12 @@ export default function FiltersPage() {
         </div>
 
         {/* Filters List */}
-        {filters.length === 0 ? (
+        {loading ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="mt-3 text-gray-500">Loading filters...</p>
+          </div>
+        ) : filters.length === 0 ? (
           <div className="bg-white rounded-lg shadow p-12 text-center">
             <div className="flex flex-col items-center">
               <button

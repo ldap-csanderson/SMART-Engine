@@ -6,10 +6,12 @@ import NewReportModal from '../components/NewReportModal'
 export default function KeywordReportsPage() {
   const navigate = useNavigate()
   const [reports, setReports] = useState([])
+  const [loading, setLoading] = useState(true)
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
 
-  const fetchReports = async () => {
+  const fetchReports = async (isInitial = false) => {
+    if (isInitial) setLoading(true)
     try {
       const status = showArchived ? 'archived' : undefined
       const url = status ? `/api/keyword-reports?status=${status}` : '/api/keyword-reports'
@@ -18,13 +20,15 @@ export default function KeywordReportsPage() {
       setReports(data.reports || [])
     } catch (err) {
       console.error('Failed to fetch reports:', err)
+    } finally {
+      if (isInitial) setLoading(false)
     }
   }
 
   // Poll for updates every 30 seconds
   useEffect(() => {
-    fetchReports()
-    const interval = setInterval(fetchReports, 30000)
+    fetchReports(true)
+    const interval = setInterval(() => fetchReports(false), 30000)
     return () => clearInterval(interval)
   }, [showArchived])
 
@@ -47,7 +51,7 @@ export default function KeywordReportsPage() {
     setReports([processingReport, ...reports])
 
     // Refresh to get actual results after a short delay
-    setTimeout(fetchReports, 2000)
+    setTimeout(() => fetchReports(false), 2000)
   }
 
   return (
@@ -82,13 +86,20 @@ export default function KeywordReportsPage() {
 
         {/* Reports List */}
         <div className="mb-8">
-          <ReportsList
-            reports={reports}
-            onViewReport={handleViewReport}
-            onReportUpdated={fetchReports}
-            onNewReport={() => setIsModalOpen(true)}
-            showArchived={showArchived}
-          />
+          {loading ? (
+            <div className="bg-white rounded-lg shadow p-12 text-center">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <p className="mt-3 text-gray-500">Loading reports...</p>
+            </div>
+          ) : (
+            <ReportsList
+              reports={reports}
+              onViewReport={handleViewReport}
+              onReportUpdated={() => fetchReports(false)}
+              onNewReport={() => setIsModalOpen(true)}
+              showArchived={showArchived}
+            />
+          )}
         </div>
 
         {/* New Report Modal */}
