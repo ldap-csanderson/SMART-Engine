@@ -1,16 +1,20 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 export default function NewRunModal({ isOpen, onClose, onSubmit }) {
   const [name, setName] = useState('')
   const [urls, setUrls] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [placeholder, setPlaceholder] = useState('')
 
-  // Generate placeholder timestamp
-  const getPlaceholder = () => {
-    const now = new Date()
-    return `Run ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')} UTC`
-  }
+  // Generate placeholder timestamp once when modal opens
+  useEffect(() => {
+    if (isOpen && !placeholder) {
+      const now = new Date()
+      const placeholderText = `Run ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')} UTC`
+      setPlaceholder(placeholderText)
+    }
+  }, [isOpen])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -111,14 +115,11 @@ export default function NewRunModal({ isOpen, onClose, onSubmit }) {
                 id="name"
                 type="text"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                placeholder={getPlaceholder()}
+                placeholder={placeholder}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 disabled={loading}
               />
-              <p className="mt-1 text-sm text-gray-500">
-                Leave empty to use timestamp: "{getPlaceholder()}"
-              </p>
             </div>
 
             {/* URLs Field */}
