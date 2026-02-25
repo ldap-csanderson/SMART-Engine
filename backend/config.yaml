@@ -7,16 +7,23 @@ app:
 
 # Google Cloud Platform Settings
 gcp:
-  project_id: "csanderson-experimental-443821"
+  project_id: "gap-analysis-nlf"
   region: "us-central1"
   credentials_path: "${GCP_SERVICE_ACCOUNT_KEY_PATH}"
 
 # BigQuery Settings
 bigquery:
   dataset: "keyword_planner_data"
+  connection: "us-central1.vertex-ai-connection"
   tables:
     runs: "keyword_runs"
     results: "keyword_results"
+    portfolio_items: "portfolio_items"
+    portfolio_embeddings: "portfolio_embeddings"
+    gap_analysis_results: "gap_analysis_results"
+  models:
+    gemini_flash: "gemini-flash"
+    text_embeddings: "text-embeddings"
   default_page_size: 100
 
 # Google Ads Settings
