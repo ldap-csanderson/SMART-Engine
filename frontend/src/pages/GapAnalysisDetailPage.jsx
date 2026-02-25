@@ -53,6 +53,7 @@ export default function GapAnalysisDetailPage() {
   const [highlightInput, setHighlightInput] = useState('0.2')
 
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
+  const [portfolioCount, setPortfolioCount] = useState(0)
   const loadedFilterResultsRef = useRef(new Set())
 
   // Poll executions every 2s while any are processing; load results as they complete
@@ -102,9 +103,10 @@ export default function GapAnalysisDetailPage() {
       setPageLoading(true)
       setError(null)
       try {
-        const [analysisRes, execsRes] = await Promise.all([
+        const [analysisRes, execsRes, portfolioRes] = await Promise.all([
           fetch(`/api/gap-analyses/${analysisId}`),
           fetch(`/api/gap-analyses/${analysisId}/filter-executions`),
+          fetch('/api/portfolio/meta'),
         ])
         if (!analysisRes.ok) throw new Error('Analysis not found')
         const analysisData = await analysisRes.json()
@@ -113,6 +115,11 @@ export default function GapAnalysisDetailPage() {
         const execsData = execsRes.ok ? await execsRes.json() : { executions: [] }
         const execs = execsData.executions || []
         setExecutions(execs)
+
+        if (portfolioRes.ok) {
+          const portfolioData = await portfolioRes.json()
+          setPortfolioCount(portfolioData.total_items || 0)
+        }
 
         // Init filter modes to 'any'
         const modes = {}
@@ -260,10 +267,26 @@ export default function GapAnalysisDetailPage() {
             Back to Gap Analyses
           </button>
           <h1 className="text-3xl font-bold text-gray-900">{analysis.name}</h1>
-          <p className="mt-1 text-gray-600">
-            {new Date(analysis.created_at).toLocaleString()} ·{' '}
-            {totalCount.toLocaleString()} matching keywords
-          </p>
+          <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+            <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
+              analysis.status === 'completed' ? 'bg-green-100 text-green-800' :
+              analysis.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+              analysis.status === 'failed' ? 'bg-red-100 text-red-800' :
+              'bg-gray-100 text-gray-800'
+            }`}>
+              {analysis.status === 'processing' ? 'In Progress' : analysis.status}
+            </span>
+            <span>·</span>
+            <span>{totalCount.toLocaleString()} keywords</span>
+            <span>·</span>
+            <span>{portfolioCount} portfolio items</span>
+            {executions.length > 0 && (
+              <>
+                <span>·</span>
+                <span>{executions.length} filter{executions.length > 1 ? 's' : ''}</span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Controls panel */}

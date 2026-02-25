@@ -176,21 +176,21 @@ export default function GapAnalysesPage() {
               <div key={a.analysis_id} className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h3 className="text-lg font-semibold text-gray-900">{a.name}</h3>
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${STATUS_COLORS[a.status] || 'bg-yellow-100 text-yellow-800'}`}>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{a.name}</h3>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${STATUS_COLORS[a.status] || 'bg-yellow-100 text-yellow-800'}`}>
                         {a.status === 'processing' ? 'In Progress' : a.status}
                       </span>
+                      <span>·</span>
+                      {a.total_keywords_analyzed > 0 && (
+                        <>
+                          <span>{a.total_keywords_analyzed.toLocaleString()} keywords</span>
+                          <span>·</span>
+                        </>
+                      )}
+                      <span>{portfolioCount} portfolio items</span>
                     </div>
                     <div className="text-sm text-gray-600 space-y-1">
-                      <p>Created: {new Date(a.created_at).toLocaleString()}</p>
-                      {reportsMap[a.report_id] && (
-                        <p>URLs: {reportsMap[a.report_id].urls?.length || 0}</p>
-                      )}
-                      {a.total_keywords_analyzed > 0 && (
-                        <p>Keywords: {a.total_keywords_analyzed.toLocaleString()}</p>
-                      )}
-                      <p>Portfolio: {portfolioCount} items</p>
                       {a.status === 'failed' && a.error_message && (
                         <p className="text-red-600 text-xs mt-1">Error: {a.error_message}</p>
                       )}
