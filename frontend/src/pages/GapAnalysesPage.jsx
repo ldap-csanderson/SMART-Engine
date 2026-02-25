@@ -16,6 +16,8 @@ export default function GapAnalysesPage() {
   const [showArchived, setShowArchived] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState({})
+  const [reportsMap, setReportsMap] = useState({}) // report_id → report metadata
+  const [portfolioCount, setPortfolioCount] = useState(0)
   const showArchivedRef = useRef(showArchived)
 
   useEffect(() => {
@@ -43,6 +45,31 @@ export default function GapAnalysesPage() {
   useEffect(() => {
     fetchAnalyses(true)
   }, [showArchived])
+
+  // Fetch reports map and portfolio count on mount (once)
+  useEffect(() => {
+    const fetchMetadata = async () => {
+      try {
+        const [reportsRes, portfolioRes] = await Promise.all([
+          fetch('/api/keyword-reports'),
+          fetch('/api/portfolio/meta'),
+        ])
+        if (reportsRes.ok) {
+          const data = await reportsRes.json()
+          const map = {}
+          ;(data.reports || []).forEach(r => { map[r.report_id] = r })
+          setReportsMap(map)
+        }
+        if (portfolioRes.ok) {
+          const data = await portfolioRes.json()
+          setPortfolioCount(data.total_items || 0)
+        }
+      } catch (err) {
+        console.error('Failed to fetch metadata:', err)
+      }
+    }
+    fetchMetadata()
+  }, [])
 
   // Poll while any analysis is processing
   useEffect(() => {
@@ -155,11 +182,15 @@ export default function GapAnalysesPage() {
                         {a.status === 'processing' ? 'In Progress' : a.status}
                       </span>
                     </div>
-                    <div className="text-sm text-gray-600 space-y-0.5">
+                    <div className="text-sm text-gray-600 space-y-1">
                       <p>Created: {new Date(a.created_at).toLocaleString()}</p>
-                      {a.total_keywords_analyzed > 0 && (
-                        <p>Keywords analyzed: {a.total_keywords_analyzed.toLocaleString()}</p>
+                      {reportsMap[a.report_id] && (
+                        <p>URLs: {reportsMap[a.report_id].urls?.length || 0}</p>
                       )}
+                      {a.total_keywords_analyzed > 0 && (
+                        <p>Keywords: {a.total_keywords_analyzed.toLocaleString()}</p>
+                      )}
+                      <p>Portfolio: {portfolioCount} items</p>
                       {a.status === 'failed' && a.error_message && (
                         <p className="text-red-600 text-xs mt-1">Error: {a.error_message}</p>
                       )}
