@@ -247,7 +247,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
 
 
 @router.get("", response_model=GapAnalysisListResponse)
-def list_gap_analyses(report_id: Optional[str] = None, limit: int = 100):
+def list_gap_analyses(report_id: Optional[str] = None, status: Optional[str] = None, limit: int = 100):
     if not db:
         raise HTTPException(503, "Firestore not initialized")
     try:
@@ -262,9 +262,17 @@ def list_gap_analyses(report_id: Optional[str] = None, limit: int = 100):
             d = doc.to_dict()
             if report_id and d.get("report_id") != report_id:
                 continue
+            doc_status = d.get("status", "")
+            # If status=archived, show only archived; otherwise exclude archived
+            if status == "archived":
+                if doc_status != "archived":
+                    continue
+            else:
+                if doc_status == "archived":
+                    continue
             analyses.append(GapAnalysis(
                 analysis_id=d["analysis_id"], name=d.get("name", ""),
-                report_id=d["report_id"], status=d["status"],
+                report_id=d["report_id"], status=doc_status,
                 created_at=ts_to_str(d["created_at"]),
                 total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
                 error_message=d.get("error_message"),
@@ -291,6 +299,29 @@ def get_gap_analysis(analysis_id: str):
     )
 
 
+class FilterResultRow(BaseModel):
+    keyword_text: str
+    result: Optional[bool]
+    confidence: Optional[str]
+
+
+@router.get("/{analysis_id}/filter-executions/{execution_id}/results", response_model=List[FilterResultRow])
+def get_filter_execution_results(analysis_id: str, execution_id: str):
+    """Return all keyword → bool result rows for a single filter execution."""
+    if not bq_client:
+        raise HTTPException(503, "BigQuery not initialized")
+    try:
+        filter_table = f"`{PROJECT_ID}.{DATASET_ID}.{T_FILTER_RESULTS}`"
+        rows = bq_client.query(f"""
+            SELECT keyword_text, result, confidence
+            FROM {filter_table}
+            WHERE execution_id = '{execution_id}' AND analysis_id = '{analysis_id}'
+        """).result()
+        return [FilterResultRow(keyword_text=r.keyword_text, result=r.result, confidence=r.confidence) for r in rows]
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/{analysis_id}/results", response_model=GapAnalysisResultsResponse)
 def get_gap_analysis_results(
     analysis_id: str,
@@ -299,13 +330,16 @@ def get_gap_analysis_results(
     order_by: str = "semantic_distance",
     order_dir: str = "DESC",
     filter_execution_ids: Optional[List[str]] = Query(default=None),
+    filter_execution_ids_false: Optional[List[str]] = Query(default=None),
 ):
     """
-    Get gap analysis results, optionally filtered by one or more pre-computed
-    filter executions (AND logic — keyword must pass ALL specified filters).
+    Get gap analysis results, optionally filtered by pre-computed filter executions.
 
-    Pass filter_execution_ids as repeated query params:
-      ?filter_execution_ids=exec1&filter_execution_ids=exec2
+    - filter_execution_ids: keyword must have result=TRUE for ALL of these (AND logic)
+    - filter_execution_ids_false: keyword must have result=FALSE for ALL of these (AND logic)
+
+    Pass as repeated query params:
+      ?filter_execution_ids=exec1&filter_execution_ids_false=exec2
     """
     if not bq_client:
         raise HTTPException(503, "BigQuery not initialized")
@@ -319,20 +353,36 @@ def get_gap_analysis_results(
         table = f"`{PROJECT_ID}.{DATASET_ID}.{T_GAP_ANALYSIS}`"
         filter_table = f"`{PROJECT_ID}.{DATASET_ID}.{T_FILTER_RESULTS}`"
 
-        # Build optional filter subquery (AND logic across all execution IDs)
-        filter_clause = ""
+        # TRUE filter: keyword must pass ALL these executions
+        true_clause = ""
         if filter_execution_ids:
-            exec_ids_sql = ", ".join(f"'{eid}'" for eid in filter_execution_ids)
+            ids_sql = ", ".join(f"'{eid}'" for eid in filter_execution_ids)
             n = len(filter_execution_ids)
-            filter_clause = f"""
+            true_clause = f"""
             AND g.keyword_text IN (
               SELECT keyword_text
               FROM {filter_table}
               WHERE analysis_id = '{analysis_id}'
-                AND execution_id IN ({exec_ids_sql})
+                AND execution_id IN ({ids_sql})
                 AND result = TRUE
               GROUP BY keyword_text
               HAVING COUNT(DISTINCT execution_id) = {n}
+            )"""
+
+        # FALSE filter: keyword must fail ALL these executions
+        false_clause = ""
+        if filter_execution_ids_false:
+            ids_sql_f = ", ".join(f"'{eid}'" for eid in filter_execution_ids_false)
+            nf = len(filter_execution_ids_false)
+            false_clause = f"""
+            AND g.keyword_text IN (
+              SELECT keyword_text
+              FROM {filter_table}
+              WHERE analysis_id = '{analysis_id}'
+                AND execution_id IN ({ids_sql_f})
+                AND result = FALSE
+              GROUP BY keyword_text
+              HAVING COUNT(DISTINCT execution_id) = {nf}
             )"""
 
         base_where = f"WHERE g.analysis_id = '{analysis_id}'"
@@ -342,7 +392,8 @@ def get_gap_analysis_results(
                    g.closest_portfolio_intent, g.semantic_distance, g.avg_monthly_searches
             FROM {table} g
             {base_where}
-            {filter_clause}
+            {true_clause}
+            {false_clause}
             ORDER BY {order_by} {order_dir.upper()}
             LIMIT {limit} OFFSET {offset}
         """).result()
@@ -360,7 +411,8 @@ def get_gap_analysis_results(
             SELECT COUNT(*)
             FROM {table} g
             {base_where}
-            {filter_clause}
+            {true_clause}
+            {false_clause}
         """).result()
         total_count = list(total_rows)[0][0]
 
@@ -369,6 +421,28 @@ def get_gap_analysis_results(
         )
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@router.patch("/{analysis_id}/archive")
+def archive_gap_analysis(analysis_id: str):
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    ref = db.collection("gap_analyses").document(analysis_id)
+    if not ref.get().exists:
+        raise HTTPException(404, f"Analysis {analysis_id} not found")
+    ref.update({"status": "archived"})
+    return {"message": f"Analysis {analysis_id} archived", "analysis_id": analysis_id}
+
+
+@router.patch("/{analysis_id}/unarchive")
+def unarchive_gap_analysis(analysis_id: str):
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    ref = db.collection("gap_analyses").document(analysis_id)
+    if not ref.get().exists:
+        raise HTTPException(404, f"Analysis {analysis_id} not found")
+    ref.update({"status": "completed"})
+    return {"message": f"Analysis {analysis_id} unarchived", "analysis_id": analysis_id}
 
 
 @router.delete("/{analysis_id}")
