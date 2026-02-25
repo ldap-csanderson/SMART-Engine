@@ -1,68 +1,64 @@
-# Keyword Planner Application
+# Gap Analysis
 
-A full-stack application for keyword research using Google Ads Keyword Planner API with hybrid Firestore + BigQuery storage.
+A full-stack application that identifies content gaps between competitor keyword traffic and your portfolio, using Google Ads Keyword Planner + BigQuery ML (Gemini + text embeddings).
 
 ## Architecture
 
 ```
 gap_analysis_v2/
-├── backend/          # FastAPI backend with Firestore + BigQuery
-├── frontend/         # React + Tailwind CSS frontend  
-├── terraform/        # Infrastructure as Code (GCP resources)
-└── scripts/          # Utility scripts for Google Ads
+├── backend/          # FastAPI — modular routers, Firestore + BigQuery
+├── frontend/         # React + Tailwind CSS SPA
+├── terraform/        # GCP infrastructure (BigQuery, Firestore, Vertex AI)
+└── scripts/          # Standalone Google Ads fetch scripts
 ```
 
-### Hybrid Data Architecture
+### Data Flow
 
 ```
-┌─────────────────────────────────────────┐
-│ Metadata Layer (Firestore)              │
-│ - Run metadata (CRUD-friendly)          │
-│ - Instant updates ✅                     │
-│ - No streaming buffer delays            │
-└─────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Analytics Layer (BigQuery)               │
-│ - Keyword results (append-only)          │
-│ - Optimized for data warehouse           │
-│ - Query millions of keywords             │
-└─────────────────────────────────────────┘
+1. Keyword Report
+   Google Ads Keyword Planner API
+       ↓ (background task)
+   Firestore: keyword_reports  ←→  BigQuery: keyword_results
+   (metadata + status)              (all keyword rows, run_id FK)
+
+2. Gap Analysis
+   BigQuery ML pipeline (bq_ml.py)
+   ├── Step 1: ML.GENERATE_TEXT  → keyword intent strings (Gemini)
+   ├── Step 2: ML.GENERATE_EMBEDDING → keyword embeddings
+   ├── Step 3: ML.GENERATE_EMBEDDING → portfolio embeddings (cached)
+   └── Step 4: ML.DISTANCE (cosine) → closest portfolio match per keyword
+       ↓
+   BigQuery: gap_analysis_results
+   (analysis_id, keyword_text, keyword_intent, closest_portfolio_item,
+    closest_portfolio_intent, semantic_distance, avg_monthly_searches)
 ```
 
-**Why Hybrid?**
-- **Firestore** for metadata: Instant archive/unarchive (no BigQuery streaming buffer delays)
-- **BigQuery** for keywords: Optimized for large-scale analytics and SQL queries
+### Storage Split
+
+| Layer | Technology | Contents |
+|---|---|---|
+| Metadata | Firestore | Reports, analyses, filters, portfolio, settings |
+| Analytics | BigQuery | keyword_results, portfolio_items/embeddings, gap_analysis_results |
+
+Firestore is used for metadata because it supports instant deletes/updates without BigQuery streaming buffer delays. BigQuery is used for keyword data because it handles millions of rows with SQL and ML functions.
 
 ## Features
 
-### Backend (FastAPI)
-- **Keyword Research API**: Fetch keyword ideas from Google Ads Keyword Planner
-- **Hybrid Storage**: Firestore for metadata, BigQuery for keyword data
-- **Instant CRUD**: Archive/unarchive runs immediately (no delays)
-- **Configuration Management**: YAML-based config with environment variables
-
-### Frontend (React + Tailwind)
-- **Unified Dashboard**: Search + history in one view
-- **Real-time Management**: Archive and view runs instantly
-- **Data Visualization**: Summary cards and detailed keyword tables
-- **Component Architecture**: Clean, reusable React components
-
-### Infrastructure (Terraform)
-- **Automated Provisioning**: Complete GCP infrastructure setup
-- **Firestore Database**: For run metadata (instant CRUD)
-- **BigQuery Table**: For keyword results (analytics)
-- **Service Account**: Secure access with minimal permissions
-- **Time Partitioning**: Efficient BigQuery storage and querying
+- **Keyword Reports** — fetch keyword ideas for a list of URLs via Google Ads Keyword Planner; results written to both Firestore (metadata) and BigQuery (rows)
+- **Gap Analysis** — 5-step BigQuery ML pipeline using Gemini Flash + text-embedding-005 to find which keywords are semantically furthest from your portfolio
+- **Portfolio embedding cache** — portfolio items are re-embedded only when the prompt changes (keyed by SHA-256 hash)
+- **Filters** — save reusable keyword filter sets (Firestore-backed)
+- **Portfolio** — manage portfolio content items used as the "known" side of gap analysis
+- **Settings** — customise Gemini prompts for keyword-to-intent and portfolio-to-intent transformations
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 20+
-- Google Cloud SDK
-- Terraform >= 1.0
-- GCP Project with billing enabled
+- Google Cloud SDK (`gcloud`)
+- Terraform ≥ 1.0
+- GCP project with billing enabled
+- Google Ads Developer Token + `scripts/google-ads.yaml`
 
 ## Quick Start
 
@@ -72,149 +68,130 @@ gap_analysis_v2/
 cd terraform
 terraform init
 terraform apply
-# Service account key will be saved to backend/service-account-key.json
 ```
+
+Creates: BigQuery dataset/tables, Firestore database, Vertex AI connection, service account.
 
 ### 2. Setup Backend
 
 ```bash
 cd backend
-
-# Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
 
-# Create .env file (already created by Terraform)
-# Verify GCP_SERVICE_ACCOUNT_KEY_PATH points to service-account-key.json
+# Copy and fill in environment variables
+cp .env.example .env
+# Set GCP_SERVICE_ACCOUNT_KEY_PATH if not using ADC
 
-# Start the API
-python api.py
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API will be available at `http://localhost:8000`
+API: `http://localhost:8000`  
+Docs: `http://localhost:8000/docs`
 
 ### 3. Setup Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
 ```
 
-Frontend will be available at `http://localhost:5173`
+Frontend: `http://localhost:5173`
 
 ## API Endpoints
 
-### POST `/keyword-planner`
-Fetch keywords for URLs and save to Firestore + BigQuery
-```json
-{
-  "urls": ["https://example.com"]
-}
-```
+### Keyword Reports
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/keyword-reports` | Submit URLs → background keyword fetch |
+| `GET` | `/keyword-reports` | List reports (`?status=archived` for archived) |
+| `GET` | `/keyword-reports/{id}/keywords` | Keywords for a report (from BigQuery) |
+| `PATCH` | `/keyword-reports/{id}/archive` | Archive a completed report |
+| `PATCH` | `/keyword-reports/{id}/unarchive` | Restore an archived report |
+| `DELETE` | `/keyword-reports/{id}` | Hard-delete a failed report |
 
-### GET `/runs`
-List all research runs (non-archived by default)
-- Query params: `status` (completed/failed/archived), `limit` (default: 100)
+### Gap Analysis
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/gap-analyses` | Run pipeline against a keyword report |
+| `GET` | `/gap-analyses` | List analyses |
+| `GET` | `/gap-analyses/{id}` | Get analysis status |
+| `GET` | `/gap-analyses/{id}/results` | Paginated results with sorting |
+| `DELETE` | `/gap-analyses/{id}` | Delete analysis (Firestore + BigQuery) |
 
-### GET `/runs/{run_id}/keywords`
-Get all keywords for a specific run (metadata from Firestore, keywords from BigQuery)
+Results sort params: `order_by` (`semantic_distance`\|`avg_monthly_searches`\|`keyword_text`), `order_dir` (`ASC`\|`DESC`)
 
-### PATCH `/runs/{run_id}/archive`
-Archive a run (instant update in Firestore)
-
-### PATCH `/runs/{run_id}/unarchive`
-Unarchive a run (instant update in Firestore)
-
-### GET `/health`
-Health check for Google Ads, BigQuery, and Firestore connections
-
-## Configuration
-
-### Backend Config (`backend/config.yaml`)
-```yaml
-gcp:
-  project_id: "your-project-id"
-  region: "us-central1"
-
-bigquery:
-  dataset: "keyword_planner_data"
-  tables:
-    results: "keyword_results"
-```
-
-### Environment Variables (`backend/.env`)
-```bash
-GCP_SERVICE_ACCOUNT_KEY_PATH=./service-account-key.json
-```
+### Other
+| Method | Path | Description |
+|---|---|---|
+| `GET/PUT` | `/portfolio` | Get/replace portfolio items |
+| `GET` | `/portfolio/meta` | Portfolio metadata |
+| `GET/POST` | `/filters` | List/create filters |
+| `GET/PUT/DELETE` | `/filters/{id}` | Manage a filter |
+| `GET/PUT` | `/settings/prompts` | Gemini prompt templates |
+| `GET` | `/health` | Connection status for GA, BQ, Firestore |
 
 ## Data Schema
 
-### Firestore Collection: `runs`
+### Firestore Collections
+
+**`keyword_reports`**
 ```json
 {
-  "run_id": "uuid",
+  "report_id": "uuid",
+  "name": "My Report",
   "created_at": "timestamp",
-  "status": "completed|failed|archived",
-  "urls": ["url1", "url2"],
-  "total_keywords_found": 1043,
+  "status": "processing | completed | failed | archived",
+  "urls": ["https://example.com"],
+  "total_keywords_found": 5885,
   "error_message": null
 }
 ```
 
-### BigQuery Table: `keyword_results`
-- `run_id` (STRING): Foreign key to Firestore runs
-- `created_at` (TIMESTAMP): Keyword fetch timestamp
-- `source_url` (STRING): Source URL
-- `keyword_text` (STRING): Keyword
-- `avg_monthly_searches` (INTEGER): Search volume
-- `competition` (STRING): LOW/MEDIUM/HIGH
-- `competition_index` (INTEGER): 0-100
-- `low_top_of_page_bid_usd` (FLOAT): Low bid estimate
-- `high_top_of_page_bid_usd` (FLOAT): High bid estimate
+**`gap_analyses`**
+```json
+{
+  "analysis_id": "uuid",
+  "name": "My Analysis",
+  "report_id": "uuid",
+  "status": "processing | completed | failed",
+  "created_at": "timestamp",
+  "total_keywords_analyzed": 5785,
+  "error_message": null
+}
+```
+
+### BigQuery Tables (`keyword_planner_data` dataset)
+
+| Table | Key Columns |
+|---|---|
+| `keyword_results` | `run_id`, `source_url`, `keyword_text`, `avg_monthly_searches`, `competition`, `low/high_top_of_page_bid_usd` |
+| `portfolio_items` | `item_text` |
+| `portfolio_embeddings` | `item_text`, `intent_string`, `embedding`, `prompt_hash`, `embedded_at` |
+| `gap_analysis_results` | `analysis_id`, `keyword_text`, `keyword_intent`, `closest_portfolio_item`, `closest_portfolio_intent`, `semantic_distance`, `avg_monthly_searches` |
+
+### BigQuery ML Models (`keyword_planner_data` dataset)
+
+| Model | Endpoint |
+|---|---|
+| `gemini-flash` | `gemini-2.5-flash` — keyword/portfolio intent generation |
+| `text-embeddings` | `text-embedding-005` — semantic embeddings (512-dim) |
 
 ## Dev Environment (tmux)
 
-The backend and frontend each run in a named tmux window. Commands below assume the `gap_analysis` tmux session is already running.
-
-### Backend (`gap_analysis:backend`)
-
-| Action | Command |
-|--------|---------|
-| **Start** | `tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"` |
-| **Stop** | `tmux kill-window -t gap_analysis:backend` |
-| **Restart** | `tmux kill-window -t gap_analysis:backend 2>/dev/null; tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"` |
-| **View logs** | `tmux attach -t gap_analysis:backend` (detach with `Ctrl-b d`) |
-
-### Frontend (`gap_analysis:frontend`)
-
-| Action | Command |
-|--------|---------|
-| **Start** | `tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"` |
-| **Stop** | `tmux kill-window -t gap_analysis:frontend` |
-| **Restart** | `tmux kill-window -t gap_analysis:frontend 2>/dev/null; tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"` |
-| **View logs** | `tmux attach -t gap_analysis:frontend` (detach with `Ctrl-b d`) |
-
-### Start Both at Once
-
 ```bash
-# Start session if it doesn't exist
+# Start both servers
 tmux new-session -d -s gap_analysis 2>/dev/null || true
 
-# Backend
 tmux kill-window -t gap_analysis:backend 2>/dev/null
-tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
+tmux new-window -t gap_analysis -n backend \
+  "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
 
-# Frontend
 tmux kill-window -t gap_analysis:frontend 2>/dev/null
-tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"
+tmux new-window -t gap_analysis -n frontend \
+  "cd $(pwd)/frontend && npm run dev"
 
 echo "Backend:  http://localhost:8000"
 echo "Frontend: http://localhost:5173"
@@ -226,34 +203,50 @@ echo "Frontend: http://localhost:5173"
 curl -s http://localhost:8000/health | python3 -m json.tool
 ```
 
----
+## Code Structure
 
-## Development
+```
+backend/
+├── api.py               # FastAPI app, CORS, lifespan startup
+├── db.py                # Shared GA/BQ/Firestore clients, constants
+├── bq_ml.py             # BQ ML model management + gap analysis pipeline
+├── config.yaml          # GCP project, table names, API settings
+├── requirements.txt
+└── routers/
+    ├── keyword_reports.py  # /keyword-reports
+    ├── gap_analysis.py     # /gap-analyses
+    ├── portfolio.py        # /portfolio
+    ├── filters.py          # /filters
+    └── settings.py         # /settings/prompts
 
-### Code Structure
+frontend/src/
+├── App.jsx                     # Routes + layout (flex column, no overflow)
+├── components/
+│   ├── Navbar.jsx
+│   ├── ReportsList.jsx         # Archive/delete/view per report status
+│   ├── KeywordTable.jsx
+│   ├── NewReportModal.jsx
+│   ├── NewFilterModal.jsx
+│   └── ...
+└── pages/
+    ├── KeywordReportsPage.jsx  # /keyword-reports
+    ├── ReportDetailPage.jsx    # /keyword-reports/:id
+    ├── FiltersPage.jsx
+    ├── FilterDetailPage.jsx
+    └── PortfolioPage.jsx
 
-**Backend:**
-- `api.py` - Main FastAPI application with Firestore + BigQuery
-- `config.yaml` - Configuration
-- `requirements.txt` - Python dependencies
+terraform/
+├── main.tf            # Provider, API enablement
+├── bigquery.tf        # Dataset, tables (keyword_results, portfolio, gap_analysis)
+├── firestore.tf       # Firestore database
+├── vertex_ai.tf       # Vertex AI Workbench + BQ connection
+├── service_accounts.tf
+└── outputs.tf
+```
 
-**Frontend:**
-- `src/App.jsx` - Main dashboard component
-- `src/components/SearchForm.jsx` - URL input form
-- `src/components/RunsList.jsx` - Runs list with archive actions
-- `src/components/KeywordTable.jsx` - Reusable keyword table
-- `vite.config.js` - Vite configuration with proxy
+## Security
 
-**Terraform:**
-- `main.tf` - Provider and API enablement
-- `firestore.tf` - Firestore database configuration
-- `bigquery.tf` - BigQuery dataset and tables
-- `service_accounts.tf` - Service account and IAM
-- `outputs.tf` - Terraform outputs
-
-## Security Notes
-
-⚠️ **NEVER commit these files:**
+⚠️ **Never commit:**
 - `backend/service-account-key.json`
 - `backend/.env`
 - `scripts/google-ads.yaml`
@@ -261,43 +254,9 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 
 ## Cleanup
 
-To destroy all GCP resources:
 ```bash
 cd terraform
 terraform destroy
 ```
 
-⚠️ This will **permanently delete** all data in Firestore and BigQuery!
-
-## Troubleshooting
-
-### Firestore Connection Issues
-1. Verify service account key path in `.env`
-2. Check IAM permissions (roles/datastore.user)
-3. Ensure Firestore API is enabled
-
-### BigQuery Connection Issues
-1. Verify service account key path in `.env`
-2. Check IAM permissions (roles/bigquery.dataEditor, roles/bigquery.jobUser)
-3. Ensure BigQuery API is enabled
-
-### Google Ads API Errors
-1. Verify `google-ads.yaml` exists in `scripts/` directory
-2. Check customer ID in `config.yaml`
-3. Ensure account has API access enabled
-
-### Frontend CORS Issues
-1. Verify backend is running on port 8000
-2. Check Vite proxy configuration in `vite.config.js`
-3. Ensure CORS origins are configured in `config.yaml`
-
-## Contributing
-
-1. Create feature branch
-2. Make changes with clear commit messages
-3. Test thoroughly
-4. Submit pull request
-
-## License
-
-MIT
+⚠️ Permanently deletes all Firestore and BigQuery data.
