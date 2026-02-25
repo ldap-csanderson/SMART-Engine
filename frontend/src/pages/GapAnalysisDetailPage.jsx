@@ -295,7 +295,42 @@ export default function GapAnalysisDetailPage() {
             {/* Filter toggles */}
             {completedExecs.length > 0 && (
               <div className="flex-1 min-w-[260px]">
-                <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-semibold text-gray-700">Filters</p>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Set all:</span>
+                    <button
+                      onClick={() => {
+                        const modes = {}
+                        completedExecs.forEach(e => { modes[e.execution_id] = 'any' })
+                        setFilterModes(modes)
+                      }}
+                      className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200 border border-gray-300"
+                    >
+                      Any
+                    </button>
+                    <button
+                      onClick={() => {
+                        const modes = {}
+                        completedExecs.forEach(e => { modes[e.execution_id] = 'true' })
+                        setFilterModes(modes)
+                      }}
+                      className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 border border-green-300"
+                    >
+                      True
+                    </button>
+                    <button
+                      onClick={() => {
+                        const modes = {}
+                        completedExecs.forEach(e => { modes[e.execution_id] = 'false' })
+                        setFilterModes(modes)
+                      }}
+                      className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 border border-red-300"
+                    >
+                      False
+                    </button>
+                  </div>
+                </div>
                 <div className="space-y-2 mb-2">
                   {completedExecs.map((e) => (
                     <FilterModeToggle
