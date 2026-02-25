@@ -3,8 +3,8 @@ import { NavLink } from 'react-router-dom'
 export default function Navbar() {
   const tabs = [
     { label: 'Keyword Reports', to: '/keyword-reports' },
-    { label: 'Filters', to: '/filters' },
     { label: 'Portfolio', to: '/portfolio' },
+    { label: 'Filters', to: '/filters' },
     { label: 'Gap Analyses', to: '/gap-analyses' },
   ]
 
