@@ -82,8 +82,12 @@ export default function ReportsList({ reports, onViewReport, onReportUpdated, sh
                 </span>
                 <span>·</span>
                 <span>{report.urls?.length || 0} URLs</span>
-                <span>·</span>
-                <span>{report.total_keywords_found.toLocaleString()} keywords</span>
+                {report.status !== 'processing' && (
+                  <>
+                    <span>·</span>
+                    <span>{report.total_keywords_found.toLocaleString()} keywords</span>
+                  </>
+                )}
               </div>
               <div className="text-sm text-gray-600 space-y-1">
                 {report.status === 'failed' && report.error_message && (
