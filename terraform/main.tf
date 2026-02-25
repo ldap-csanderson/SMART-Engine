@@ -28,3 +28,17 @@ resource "google_project_service" "iam" {
   
   disable_on_destroy = false
 }
+
+resource "google_project_service" "aiplatform" {
+  project = var.project_id
+  service = "aiplatform.googleapis.com"
+  
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "bigqueryconnection" {
+  project = var.project_id
+  service = "bigqueryconnection.googleapis.com"
+  
+  disable_on_destroy = false
+}

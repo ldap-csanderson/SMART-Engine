@@ -1,7 +1,7 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
-  default     = "csanderson-experimental-443821"
+  default     = "gap-analysis-nlf"
 }
 
 variable "region" {
