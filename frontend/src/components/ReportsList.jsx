@@ -69,9 +69,9 @@ export default function ReportsList({ reports, onViewReport, onReportUpdated, sh
         <div key={report.report_id} className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow">
           <div className="flex items-start justify-between">
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <h3 className="text-lg font-semibold text-gray-900">{report.name}</h3>
-                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">{report.name}</h3>
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
                   report.status === 'completed' ? 'bg-green-100 text-green-800' :
                   report.status === 'archived'  ? 'bg-gray-100 text-gray-800' :
                   report.status === 'processing' ? 'bg-blue-100 text-blue-800' :
@@ -80,12 +80,12 @@ export default function ReportsList({ reports, onViewReport, onReportUpdated, sh
                 }`}>
                   {report.status === 'processing' ? 'In Progress' : report.status}
                 </span>
+                <span>·</span>
+                <span>{report.urls?.length || 0} URLs</span>
+                <span>·</span>
+                <span>{report.total_keywords_found.toLocaleString()} keywords</span>
               </div>
-
               <div className="text-sm text-gray-600 space-y-1">
-                <p>Created: {new Date(report.created_at).toLocaleString()}</p>
-                <p>URLs: {report.urls?.length || 0}</p>
-                <p>Keywords: {report.total_keywords_found.toLocaleString()}</p>
                 {report.status === 'failed' && report.error_message && (
                   <p className="text-red-600 text-xs mt-1">Error: {report.error_message}</p>
                 )}

@@ -99,11 +99,21 @@ export default function ReportDetailPage() {
               <h1 className="text-3xl font-bold text-gray-900">
                 {reportData.name || reportData.report_id}
               </h1>
-              <p className="mt-1 text-gray-600">
-                Created: {new Date(reportData.created_at).toLocaleString()} |{' '}
-                Status: <span className="font-medium">{reportData.status}</span> |{' '}
-                Keywords: <span className="font-medium">{reportData.total_keywords_found.toLocaleString()}</span>
-              </p>
+              <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+                <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
+                  reportData.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  reportData.status === 'archived'  ? 'bg-gray-100 text-gray-800' :
+                  reportData.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                  reportData.status === 'failed'    ? 'bg-red-100 text-red-800' :
+                  'bg-yellow-100 text-yellow-800'
+                }`}>
+                  {reportData.status === 'processing' ? 'In Progress' : reportData.status}
+                </span>
+                <span>·</span>
+                <span>{reportData.urls?.length || 0} URLs</span>
+                <span>·</span>
+                <span>{reportData.total_keywords_found.toLocaleString()} keywords</span>
+              </div>
             </div>
           </div>
         </div>
