@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import RunFiltersModal from '../components/RunFiltersModal'
 
 // Three-state toggle: any → true → false → any
 function FilterModeToggle({ label, mode, onChange }) {
@@ -51,6 +52,50 @@ export default function GapAnalysisDetailPage() {
   const [highlightThreshold, setHighlightThreshold] = useState(0.2)
   const [highlightInput, setHighlightInput] = useState('0.2')
 
+  const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
+  const loadedFilterResultsRef = useRef(new Set())
+
+  // Poll executions every 2s while any are processing; load results as they complete
+  useEffect(() => {
+    if (!executions.some(e => e.status === 'processing')) return
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions`)
+        if (!res.ok) return
+        const data = await res.json()
+        const fresh = data.executions || []
+        setExecutions(fresh)
+
+        // Add filter modes for new executions
+        setFilterModes((prev) => {
+          const next = { ...prev }
+          fresh.forEach((e) => { if (!(e.execution_id in next)) next[e.execution_id] = 'any' })
+          return next
+        })
+
+        // Load results for newly-completed executions
+        const completedIds = fresh.filter(e => e.status === 'completed').map(e => e.execution_id)
+        for (const execId of completedIds) {
+          if (loadedFilterResultsRef.current.has(execId)) continue
+          loadedFilterResultsRef.current.add(execId)
+          try {
+            const r = await fetch(`/api/gap-analyses/${analysisId}/filter-executions/${execId}/results`)
+            const rows = await r.json()
+            const map = {}
+            rows.forEach((row) => { map[row.keyword_text] = row.result })
+            setFilterResultsMap((prev) => ({ ...prev, [execId]: map }))
+          } catch (err) {
+            console.error('Failed to load filter results for', execId, err)
+            loadedFilterResultsRef.current.delete(execId)
+          }
+        }
+      } catch (err) {
+        console.error('Poll executions error:', err)
+      }
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [executions, analysisId])
+
   // Load analysis metadata + filter executions + filter result data on mount
   useEffect(() => {
     const init = async () => {
@@ -83,6 +128,7 @@ export default function GapAnalysisDetailPage() {
               .then((rows) => {
                 const map = {}
                 rows.forEach((row) => { map[row.keyword_text] = row.result })
+                loadedFilterResultsRef.current.add(e.execution_id)
                 return [e.execution_id, map]
               })
           )
@@ -220,7 +266,15 @@ export default function GapAnalysisDetailPage() {
             {/* Filter toggles */}
             {completedExecs.length > 0 && (
               <div className="flex-1 min-w-[260px]">
-                <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-semibold text-gray-700">Filters</p>
+                  <button
+                    onClick={() => setShowRunFiltersModal(true)}
+                    className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none"
+                  >
+                    + Run More Filters
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {completedExecs.map((e) => (
                     <FilterModeToggle
@@ -238,8 +292,16 @@ export default function GapAnalysisDetailPage() {
             )}
             {completedExecs.length === 0 && (
               <div className="flex-1 min-w-[200px]">
-                <p className="text-sm font-semibold text-gray-700 mb-1">Filters</p>
-                <p className="text-sm text-gray-400 italic">No filters run on this analysis.</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-semibold text-gray-700">Filters</p>
+                  <button
+                    onClick={() => setShowRunFiltersModal(true)}
+                    className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none"
+                  >
+                    + Run Filters
+                  </button>
+                </div>
+                <p className="text-sm text-gray-400 italic">No filters run yet.</p>
               </div>
             )}
 
@@ -360,6 +422,14 @@ export default function GapAnalysisDetailPage() {
             </table>
           </div>
         )}
+
+        <RunFiltersModal
+          isOpen={showRunFiltersModal}
+          onClose={() => setShowRunFiltersModal(false)}
+          onSubmit={() => setShowRunFiltersModal(false)}
+          analysisId={analysisId}
+          existingExecutions={executions}
+        />
       </div>
     </div>
   )
