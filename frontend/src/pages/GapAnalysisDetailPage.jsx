@@ -289,8 +289,10 @@ export default function GapAnalysisDetailPage() {
                 >
                   + Run More Filters
                 </button>
-                {executions.some(e => e.status === 'processing') && (
-                  <p className="text-xs text-blue-500 mt-2">Some filters are still processing…</p>
+                {executions.filter(e => e.status === 'processing').length > 0 && (
+                  <p className="text-xs text-blue-500 mt-2">
+                    Processing: {executions.filter(e => e.status === 'processing').map(e => e.filter_snapshot.name).join(', ')}
+                  </p>
                 )}
               </div>
             )}
