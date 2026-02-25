@@ -8,7 +8,6 @@ from db import ga_client, bq_client, db, config
 from bq_ml import create_models_if_not_exist
 from routers.settings import _ensure_defaults
 from routers import keyword_reports, filters, portfolio, gap_analysis, settings
-from routers import runs
 
 
 @asynccontextmanager
@@ -35,7 +34,6 @@ app.include_router(filters.router)
 app.include_router(portfolio.router)
 app.include_router(gap_analysis.router)
 app.include_router(settings.router)
-app.include_router(runs.router)
 
 
 @app.get("/")
