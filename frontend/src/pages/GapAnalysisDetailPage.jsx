@@ -159,8 +159,10 @@ export default function GapAnalysisDetailPage() {
     return `/api/gap-analyses/${analysisId}/results?${params.toString()}`
   }, [analysisId, filterModes])
 
-  // Fetch results whenever filterModes change (and after init)
+  // Fetch results whenever the query URL actually changes (not just any filterModes mutation)
   const [filterModesReady, setFilterModesReady] = useState(false)
+  const [lastUrl, setLastUrl] = useState('')
+  
   useEffect(() => {
     if (Object.keys(filterModes).length > 0 || !pageLoading) {
       setFilterModesReady(true)
@@ -170,10 +172,14 @@ export default function GapAnalysisDetailPage() {
   useEffect(() => {
     if (!filterModesReady && pageLoading) return
     if (!analysis) return
+    const url = buildResultsUrl()
+    if (url === lastUrl) return // Don't refetch if URL hasn't changed
+    setLastUrl(url)
+    
     const fetchResults = async () => {
       setResultsLoading(true)
       try {
-        const res = await fetch(buildResultsUrl())
+        const res = await fetch(url)
         if (!res.ok) throw new Error('Failed to load results')
         const data = await res.json()
         setResults(data.results || [])
@@ -185,7 +191,7 @@ export default function GapAnalysisDetailPage() {
       }
     }
     fetchResults()
-  }, [filterModes, analysis, filterModesReady])
+  }, [filterModes, analysis, filterModesReady, buildResultsUrl, lastUrl])
 
   const handleFilterModeChange = (execId, mode) => {
     setFilterModes((prev) => ({ ...prev, [execId]: mode }))
@@ -279,7 +285,7 @@ export default function GapAnalysisDetailPage() {
                 </div>
                 <button
                   onClick={() => setShowRunFiltersModal(true)}
-                  className="text-xs px-3 py-1.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 focus:outline-none border border-gray-300 w-full"
+                  className="text-xs px-3 py-1.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 focus:outline-none border border-gray-300"
                 >
                   + Run More Filters
                 </button>
@@ -424,7 +430,19 @@ export default function GapAnalysisDetailPage() {
         <RunFiltersModal
           isOpen={showRunFiltersModal}
           onClose={() => setShowRunFiltersModal(false)}
-          onSubmit={() => setShowRunFiltersModal(false)}
+          onSubmit={async () => {
+            setShowRunFiltersModal(false)
+            // Immediately fetch updated executions so polling starts
+            try {
+              const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions`)
+              if (res.ok) {
+                const data = await res.json()
+                setExecutions(data.executions || [])
+              }
+            } catch (err) {
+              console.error('Failed to refresh executions after filter submit:', err)
+            }
+          }}
           analysisId={analysisId}
           existingExecutions={executions}
         />
