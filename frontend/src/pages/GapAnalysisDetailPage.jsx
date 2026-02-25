@@ -266,16 +266,8 @@ export default function GapAnalysisDetailPage() {
             {/* Filter toggles */}
             {completedExecs.length > 0 && (
               <div className="flex-1 min-w-[260px]">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm font-semibold text-gray-700">Filters</p>
-                  <button
-                    onClick={() => setShowRunFiltersModal(true)}
-                    className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none"
-                  >
-                    + Run More Filters
-                  </button>
-                </div>
-                <div className="space-y-2">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
+                <div className="space-y-2 mb-2">
                   {completedExecs.map((e) => (
                     <FilterModeToggle
                       key={e.execution_id}
@@ -285,6 +277,12 @@ export default function GapAnalysisDetailPage() {
                     />
                   ))}
                 </div>
+                <button
+                  onClick={() => setShowRunFiltersModal(true)}
+                  className="text-xs px-3 py-1.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 focus:outline-none border border-gray-300 w-full"
+                >
+                  + Run More Filters
+                </button>
                 {executions.some(e => e.status === 'processing') && (
                   <p className="text-xs text-blue-500 mt-2">Some filters are still processing…</p>
                 )}
