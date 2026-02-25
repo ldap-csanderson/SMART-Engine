@@ -206,12 +206,8 @@ export default function GapAnalysesPage() {
                         {a.status === 'processing' ? 'In Progress' : a.status}
                       </span>
                       <span>·</span>
-                      {a.total_keywords_analyzed > 0 && (
-                        <>
-                          <span>{a.total_keywords_analyzed.toLocaleString()} keywords</span>
-                          <span>·</span>
-                        </>
-                      )}
+                      <span>{a.total_keywords_analyzed.toLocaleString()} keywords</span>
+                      <span>·</span>
                       <span>{portfolioCount} portfolio items</span>
                       {executionsMap[a.analysis_id]?.length > 0 && (
                         <>
