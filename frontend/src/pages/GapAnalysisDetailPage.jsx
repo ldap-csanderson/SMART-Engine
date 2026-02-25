@@ -297,17 +297,21 @@ export default function GapAnalysisDetailPage() {
               </div>
             )}
             {completedExecs.length === 0 && (
-              <div className="flex-1 min-w-[200px]">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-semibold text-gray-700">Filters</p>
-                  <button
-                    onClick={() => setShowRunFiltersModal(true)}
-                    className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none"
-                  >
-                    + Run Filters
-                  </button>
-                </div>
-                <p className="text-sm text-gray-400 italic">No filters run yet.</p>
+              <div className="flex-1 min-w-[260px]">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
+                {executions.filter(e => e.status === 'processing').length > 0 ? (
+                  <p className="text-xs text-blue-500 mb-2">
+                    Processing: {executions.filter(e => e.status === 'processing').map(e => e.filter_snapshot.name).join(', ')}
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-400 italic mb-2">No filters run yet.</p>
+                )}
+                <button
+                  onClick={() => setShowRunFiltersModal(true)}
+                  className="text-xs px-3 py-1.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 focus:outline-none border border-gray-300"
+                >
+                  + Run More Filters
+                </button>
               </div>
             )}
 
