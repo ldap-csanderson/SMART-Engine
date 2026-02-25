@@ -103,7 +103,7 @@ export default function GapAnalysisDetailPage() {
   // Build results query URL from current filter modes
   const buildResultsUrl = useCallback(() => {
     const params = new URLSearchParams()
-    params.set('limit', '500')
+    params.set('limit', '100000')
     params.set('order_by', 'semantic_distance')
     params.set('order_dir', 'DESC')
     Object.entries(filterModes).forEach(([execId, mode]) => {
@@ -210,12 +210,12 @@ export default function GapAnalysisDetailPage() {
           <h1 className="text-3xl font-bold text-gray-900">{analysis.name}</h1>
           <p className="mt-1 text-gray-600">
             {new Date(analysis.created_at).toLocaleString()} ·{' '}
-            {totalCount.toLocaleString()} matching keywords (top 500 loaded)
+            {totalCount.toLocaleString()} matching keywords
           </p>
         </div>
 
         {/* Controls panel */}
-        <div className="bg-white rounded-lg shadow p-5 mb-6">
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex flex-wrap gap-6 items-start">
             {/* Filter toggles */}
             {completedExecs.length > 0 && (
