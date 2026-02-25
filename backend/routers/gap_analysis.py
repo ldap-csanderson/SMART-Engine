@@ -3,12 +3,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from google.cloud import firestore
 from pydantic import BaseModel
 
-from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_GAP_ANALYSIS
-from bq_ml import run_gap_analysis_pipeline
+from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_GAP_ANALYSIS, T_FILTER_RESULTS
+from bq_ml import run_gap_analysis_pipeline, run_filter_pipeline
 
 router = APIRouter(prefix="/gap-analyses", tags=["gap-analysis"])
 
@@ -57,6 +57,7 @@ Examples:
 class GapAnalysisCreate(BaseModel):
     report_id: str
     name: str
+    filter_ids: Optional[List[str]] = None
 
 
 class GapAnalysis(BaseModel):
@@ -109,8 +110,34 @@ def _get_prompts() -> dict:
     }
 
 
-def _run_analysis_background(analysis_id: str, report_id: str):
-    """Background task: run the full gap analysis pipeline."""
+def _run_filter_execution(execution_id: str, analysis_id: str, filter_snapshot: dict):
+    """Run a single filter execution in the background and update Firestore."""
+    label = filter_snapshot.get("label", execution_id)
+    print(f"🔄 Filter execution {execution_id} started (label={label})")
+    try:
+        count = run_filter_pipeline(
+            execution_id=execution_id,
+            analysis_id=analysis_id,
+            filter_snapshot=filter_snapshot,
+        )
+        db.collection("filter_executions").document(execution_id).update({
+            "status": "completed",
+            "total_evaluated": count,
+        })
+        print(f"✅ Filter execution {execution_id} completed — {count} rows")
+    except Exception as e:
+        print(f"❌ Filter execution {execution_id} failed: {e}")
+        try:
+            db.collection("filter_executions").document(execution_id).update({
+                "status": "failed",
+                "error_message": str(e),
+            })
+        except Exception:
+            pass
+
+
+def _run_analysis_background(analysis_id: str, report_id: str, filter_ids: Optional[List[str]] = None):
+    """Background task: run the full gap analysis pipeline, then any chained filters."""
     print(f"🔄 Gap analysis {analysis_id} started")
     try:
         prompts = _get_prompts()
@@ -134,6 +161,36 @@ def _run_analysis_background(analysis_id: str, report_id: str):
             })
         except Exception:
             pass
+        return  # Don't run filters if core analysis failed
+
+    # Chain filter executions if requested
+    if filter_ids:
+        for filter_id in filter_ids:
+            try:
+                fdoc = db.collection("filters").document(filter_id).get()
+                if not fdoc.exists:
+                    print(f"⚠️ Filter {filter_id} not found — skipping")
+                    continue
+                fd = fdoc.to_dict()
+                filter_snapshot = {
+                    "name": fd["name"],
+                    "label": fd["label"],
+                    "text": fd["text"],
+                }
+                execution_id = str(uuid.uuid4())
+                db.collection("filter_executions").document(execution_id).set({
+                    "execution_id": execution_id,
+                    "analysis_id": analysis_id,
+                    "filter_id": filter_id,
+                    "filter_snapshot": filter_snapshot,
+                    "status": "processing",
+                    "created_at": firestore.SERVER_TIMESTAMP,
+                    "total_evaluated": 0,
+                    "error_message": None,
+                })
+                _run_filter_execution(execution_id, analysis_id, filter_snapshot)
+            except Exception as e:
+                print(f"⚠️ Failed to chain filter {filter_id} on analysis {analysis_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +217,12 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     if count == 0:
         raise HTTPException(400, "Portfolio is empty. Add items to the portfolio before running an analysis.")
 
+    # Validate filter IDs if provided
+    if payload.filter_ids:
+        for filter_id in payload.filter_ids:
+            if not db.collection("filters").document(filter_id).get().exists:
+                raise HTTPException(404, f"Filter {filter_id} not found")
+
     analysis_id = str(uuid.uuid4())
     db.collection("gap_analyses").document(analysis_id).set({
         "analysis_id": analysis_id,
@@ -170,7 +233,9 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "total_keywords_analyzed": 0,
         "error_message": None,
     })
-    background_tasks.add_task(_run_analysis_background, analysis_id, payload.report_id)
+    background_tasks.add_task(
+        _run_analysis_background, analysis_id, payload.report_id, payload.filter_ids
+    )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
     return GapAnalysis(
@@ -233,7 +298,15 @@ def get_gap_analysis_results(
     offset: int = 0,
     order_by: str = "semantic_distance",
     order_dir: str = "DESC",
+    filter_execution_ids: Optional[List[str]] = Query(default=None),
 ):
+    """
+    Get gap analysis results, optionally filtered by one or more pre-computed
+    filter executions (AND logic — keyword must pass ALL specified filters).
+
+    Pass filter_execution_ids as repeated query params:
+      ?filter_execution_ids=exec1&filter_execution_ids=exec2
+    """
     if not bq_client:
         raise HTTPException(503, "BigQuery not initialized")
     if order_dir.upper() not in ("ASC", "DESC"):
@@ -244,11 +317,32 @@ def get_gap_analysis_results(
 
     try:
         table = f"`{PROJECT_ID}.{DATASET_ID}.{T_GAP_ANALYSIS}`"
+        filter_table = f"`{PROJECT_ID}.{DATASET_ID}.{T_FILTER_RESULTS}`"
+
+        # Build optional filter subquery (AND logic across all execution IDs)
+        filter_clause = ""
+        if filter_execution_ids:
+            exec_ids_sql = ", ".join(f"'{eid}'" for eid in filter_execution_ids)
+            n = len(filter_execution_ids)
+            filter_clause = f"""
+            AND g.keyword_text IN (
+              SELECT keyword_text
+              FROM {filter_table}
+              WHERE analysis_id = '{analysis_id}'
+                AND execution_id IN ({exec_ids_sql})
+                AND result = TRUE
+              GROUP BY keyword_text
+              HAVING COUNT(DISTINCT execution_id) = {n}
+            )"""
+
+        base_where = f"WHERE g.analysis_id = '{analysis_id}'"
+
         rows = bq_client.query(f"""
-            SELECT keyword_text, keyword_intent, closest_portfolio_item,
-                   closest_portfolio_intent, semantic_distance, avg_monthly_searches
-            FROM {table}
-            WHERE analysis_id = '{analysis_id}'
+            SELECT g.keyword_text, g.keyword_intent, g.closest_portfolio_item,
+                   g.closest_portfolio_intent, g.semantic_distance, g.avg_monthly_searches
+            FROM {table} g
+            {base_where}
+            {filter_clause}
             ORDER BY {order_by} {order_dir.upper()}
             LIMIT {limit} OFFSET {offset}
         """).result()
@@ -262,10 +356,13 @@ def get_gap_analysis_results(
             avg_monthly_searches=row.avg_monthly_searches,
         ) for row in rows]
 
-        total = bq_client.query(
-            f"SELECT COUNT(*) FROM {table} WHERE analysis_id = '{analysis_id}'"
-        ).result()
-        total_count = list(total)[0][0]
+        total_rows = bq_client.query(f"""
+            SELECT COUNT(*)
+            FROM {table} g
+            {base_where}
+            {filter_clause}
+        """).result()
+        total_count = list(total_rows)[0][0]
 
         return GapAnalysisResultsResponse(
             analysis_id=analysis_id, results=results, total_count=total_count
@@ -279,7 +376,7 @@ def delete_gap_analysis(analysis_id: str):
     if not db:
         raise HTTPException(503, "Firestore not initialized")
 
-    # Delete BQ rows
+    # Delete BQ gap analysis rows
     if bq_client:
         try:
             bq_client.query(
@@ -287,9 +384,31 @@ def delete_gap_analysis(analysis_id: str):
                 f"WHERE analysis_id = '{analysis_id}'"
             ).result()
         except Exception as e:
-            print(f"⚠️ Could not delete BQ rows for {analysis_id}: {e}")
+            print(f"⚠️ Could not delete BQ gap analysis rows for {analysis_id}: {e}")
 
-    # Delete Firestore doc
+        # Delete BQ filter result rows for all executions in this analysis
+        try:
+            bq_client.query(
+                f"DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{T_FILTER_RESULTS}` "
+                f"WHERE analysis_id = '{analysis_id}'"
+            ).result()
+        except Exception as e:
+            print(f"⚠️ Could not delete BQ filter rows for {analysis_id}: {e}")
+
+    # Delete Firestore filter_executions docs
+    if db:
+        try:
+            exec_docs = (
+                db.collection("filter_executions")
+                .where("analysis_id", "==", analysis_id)
+                .stream()
+            )
+            for ed in exec_docs:
+                ed.reference.delete()
+        except Exception as e:
+            print(f"⚠️ Could not delete filter_executions for {analysis_id}: {e}")
+
+    # Delete Firestore gap_analyses doc
     ref = db.collection("gap_analyses").document(analysis_id)
     if not ref.get().exists:
         raise HTTPException(404, f"Analysis {analysis_id} not found")

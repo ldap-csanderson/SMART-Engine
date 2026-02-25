@@ -21,6 +21,7 @@ bigquery:
     portfolio_items: "portfolio_items"
     portfolio_embeddings: "portfolio_embeddings"
     gap_analysis_results: "gap_analysis_results"
+    filter_results: "filter_results"
   models:
     gemini_flash: "gemini-flash"
     text_embeddings: "text-embeddings"

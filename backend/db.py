@@ -19,6 +19,7 @@ T_RESULTS = config["bigquery"]["tables"]["results"]
 T_PORTFOLIO_ITEMS = config["bigquery"]["tables"]["portfolio_items"]
 T_PORTFOLIO_EMBEDDINGS = config["bigquery"]["tables"]["portfolio_embeddings"]
 T_GAP_ANALYSIS = config["bigquery"]["tables"]["gap_analysis_results"]
+T_FILTER_RESULTS = config["bigquery"]["tables"]["filter_results"]
 
 # Model names
 MODEL_GEMINI = config["bigquery"]["models"]["gemini_flash"]

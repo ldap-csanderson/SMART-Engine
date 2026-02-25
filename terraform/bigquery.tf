@@ -275,3 +275,64 @@ resource "google_bigquery_table" "gap_analysis_results" {
 
   clustering = ["analysis_id"]
 }
+
+# Filter Results Table
+resource "google_bigquery_table" "filter_results" {
+  dataset_id          = google_bigquery_dataset.keyword_planner.dataset_id
+  table_id            = "filter_results"
+  deletion_protection = false
+
+  description = "LLM-evaluated boolean filter results per keyword per filter execution"
+
+  schema = jsonencode([
+    {
+      name        = "execution_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique identifier for the filter execution (UUID)"
+    },
+    {
+      name        = "analysis_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Foreign key to gap_analysis_results"
+    },
+    {
+      name        = "keyword_text"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "The keyword being evaluated"
+    },
+    {
+      name        = "label"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Filter label (e.g. non_branded, purchase_intent) — snapshotted at execution time"
+    },
+    {
+      name        = "result"
+      type        = "BOOL"
+      mode        = "NULLABLE"
+      description = "LLM evaluation result (true = passes filter)"
+    },
+    {
+      name        = "confidence"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "LLM confidence: high, medium, or low"
+    },
+    {
+      name        = "created_at"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when this filter result was generated"
+    }
+  ])
+
+  time_partitioning {
+    type  = "DAY"
+    field = "created_at"
+  }
+
+  clustering = ["analysis_id", "label"]
+}

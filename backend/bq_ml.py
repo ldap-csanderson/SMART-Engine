@@ -3,7 +3,7 @@ import hashlib
 from db import (
     bq_client, PROJECT_ID, DATASET_ID, CONNECTION_ID,
     MODEL_GEMINI, MODEL_EMBEDDINGS,
-    T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, T_GAP_ANALYSIS,
+    T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, T_GAP_ANALYSIS, T_FILTER_RESULTS,
 )
 
 # ---------------------------------------------------------------------------
@@ -246,4 +246,93 @@ def run_gap_analysis_pipeline(
         except Exception:
             pass
 
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Filter execution pipeline
+# ---------------------------------------------------------------------------
+
+_FILTER_LLM_OPTS = "STRUCT(100 AS max_output_tokens, 0.1 AS temperature, TRUE AS flatten_json_output)"
+
+
+def run_filter_pipeline(
+    execution_id: str,
+    analysis_id: str,
+    filter_snapshot: dict,
+) -> int:
+    """
+    Run LLM-based boolean filter over all keywords in a gap analysis.
+
+    filter_snapshot must have: label (str), text (str)
+
+    Returns the number of rows inserted into filter_results.
+    """
+    label = filter_snapshot["label"]
+    label_sql = _sq(label)  # label safe for BQ single-quoted string
+
+    # Build the full prompt text in Python first, then escape once with _sq().
+    # The LLM is asked to return: {"<label>": true/false, "confidence": "high/medium/low"}
+    prompt_prefix = (
+        f"{filter_snapshot['text']}\n\n"
+        f"Evaluate this keyword.\n\n"
+        f"Return ONLY raw JSON (no markdown, no code blocks).\n"
+        f'JSON: {{"{label}": true/false, "confidence": "high/medium/low"}}\n\n'
+        f"Keyword: "
+    )
+    escaped_prefix = _sq(prompt_prefix)
+
+    # CONCAT appends the keyword_text to the static prompt prefix
+    prompt_concat = f"CONCAT('{escaped_prefix}', keyword_text)"
+
+    # JSON parse helpers — strip markdown fences then extract fields
+    def _parse(field: str) -> str:
+        return (
+            f"JSON_VALUE(\n"
+            f"              REGEXP_REPLACE(\n"
+            f"                REGEXP_REPLACE(ml_generate_text_llm_result, r'```json\\s*', ''),\n"
+            f"                r'\\s*```', ''\n"
+            f"              ),\n"
+            f"              '$.{field}'\n"
+            f"            )"
+        )
+
+    run_bq(f"""
+        INSERT INTO {_t(T_FILTER_RESULTS)}
+          (execution_id, analysis_id, keyword_text, label, result, confidence, created_at)
+        WITH llm AS (
+          SELECT * FROM ML.GENERATE_TEXT(
+            MODEL {_m(MODEL_GEMINI)},
+            (
+              SELECT DISTINCT
+                keyword_text,
+                {prompt_concat} AS prompt
+              FROM {_t(T_GAP_ANALYSIS)}
+              WHERE analysis_id = '{analysis_id}'
+            ),
+            {_FILTER_LLM_OPTS}
+          )
+        ),
+        parsed AS (
+          SELECT
+            keyword_text,
+            CAST({_parse(label)} AS BOOL) AS result,
+            {_parse('confidence')} AS confidence
+          FROM llm
+        )
+        SELECT
+          '{execution_id}' AS execution_id,
+          '{analysis_id}' AS analysis_id,
+          keyword_text,
+          '{label_sql}' AS label,
+          result,
+          confidence,
+          CURRENT_TIMESTAMP() AS created_at
+        FROM parsed
+    """, f"Filter pipeline: {label} on analysis {analysis_id}")
+
+    count = run_bq_scalar(f"""
+        SELECT COUNT(*) FROM {_t(T_FILTER_RESULTS)}
+        WHERE execution_id = '{execution_id}'
+    """)
     return count
