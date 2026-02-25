@@ -18,6 +18,7 @@ export default function GapAnalysesPage() {
   const [actionLoading, setActionLoading] = useState({})
   const [reportsMap, setReportsMap] = useState({}) // report_id → report metadata
   const [portfolioCount, setPortfolioCount] = useState(0)
+  const [executionsMap, setExecutionsMap] = useState({}) // analysis_id → executions[]
   const showArchivedRef = useRef(showArchived)
 
   useEffect(() => {
@@ -45,6 +46,29 @@ export default function GapAnalysesPage() {
   useEffect(() => {
     fetchAnalyses(true)
   }, [showArchived])
+
+  // Fetch executions for each analysis
+  useEffect(() => {
+    if (analyses.length === 0) return
+    const fetchExecutions = async () => {
+      const map = {}
+      await Promise.all(
+        analyses.map(async (a) => {
+          try {
+            const res = await fetch(`/api/gap-analyses/${a.analysis_id}/filter-executions`)
+            if (res.ok) {
+              const data = await res.json()
+              map[a.analysis_id] = data.executions || []
+            }
+          } catch (err) {
+            console.error(`Failed to fetch executions for ${a.analysis_id}:`, err)
+          }
+        })
+      )
+      setExecutionsMap(map)
+    }
+    fetchExecutions()
+  }, [analyses])
 
   // Fetch reports map and portfolio count on mount (once)
   useEffect(() => {
@@ -189,6 +213,12 @@ export default function GapAnalysesPage() {
                         </>
                       )}
                       <span>{portfolioCount} portfolio items</span>
+                      {executionsMap[a.analysis_id]?.length > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>{executionsMap[a.analysis_id].length} filter{executionsMap[a.analysis_id].length > 1 ? 's' : ''}</span>
+                        </>
+                      )}
                     </div>
                     <div className="text-sm text-gray-600 space-y-1">
                       {a.status === 'failed' && a.error_message && (
