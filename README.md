@@ -180,6 +180,54 @@ GCP_SERVICE_ACCOUNT_KEY_PATH=./service-account-key.json
 - `low_top_of_page_bid_usd` (FLOAT): Low bid estimate
 - `high_top_of_page_bid_usd` (FLOAT): High bid estimate
 
+## Dev Environment (tmux)
+
+The backend and frontend each run in a named tmux window. Commands below assume the `gap_analysis` tmux session is already running.
+
+### Backend (`gap_analysis:backend`)
+
+| Action | Command |
+|--------|---------|
+| **Start** | `tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"` |
+| **Stop** | `tmux kill-window -t gap_analysis:backend` |
+| **Restart** | `tmux kill-window -t gap_analysis:backend 2>/dev/null; tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"` |
+| **View logs** | `tmux attach -t gap_analysis:backend` (detach with `Ctrl-b d`) |
+
+### Frontend (`gap_analysis:frontend`)
+
+| Action | Command |
+|--------|---------|
+| **Start** | `tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"` |
+| **Stop** | `tmux kill-window -t gap_analysis:frontend` |
+| **Restart** | `tmux kill-window -t gap_analysis:frontend 2>/dev/null; tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"` |
+| **View logs** | `tmux attach -t gap_analysis:frontend` (detach with `Ctrl-b d`) |
+
+### Start Both at Once
+
+```bash
+# Start session if it doesn't exist
+tmux new-session -d -s gap_analysis 2>/dev/null || true
+
+# Backend
+tmux kill-window -t gap_analysis:backend 2>/dev/null
+tmux new-window -t gap_analysis -n backend "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
+
+# Frontend
+tmux kill-window -t gap_analysis:frontend 2>/dev/null
+tmux new-window -t gap_analysis -n frontend "cd $(pwd)/frontend && npm run dev"
+
+echo "Backend:  http://localhost:8000"
+echo "Frontend: http://localhost:5173"
+```
+
+### Health Check
+
+```bash
+curl -s http://localhost:8000/health | python3 -m json.tool
+```
+
+---
+
 ## Development
 
 ### Code Structure
