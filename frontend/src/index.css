@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* Safelist spacing utilities so JIT doesn't drop values not seen in source */
+@source inline("{p,px,py,pt,pb,pl,pr}-{0,1,2,3,4,5,6,7,8,9,10,11,12,14,16,20,24,28,32}");
+@source inline("{m,mx,my,mt,mb,ml,mr}-{0,1,2,3,4,5,6,7,8,9,10,11,12,14,16,20,24}");
+@source inline("gap-{0,1,2,3,4,5,6,7,8,9,10,11,12,14,16}");
+@source inline("space-{x,y}-{0,1,2,3,4,5,6,7,8}");
