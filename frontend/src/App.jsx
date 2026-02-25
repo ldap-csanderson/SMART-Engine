@@ -8,16 +8,18 @@ import PortfolioPage from './pages/PortfolioPage'
 
 function App() {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <Navbar />
-      <Routes>
-        <Route path="/" element={<Navigate to="/keyword-reports" replace />} />
-        <Route path="/keyword-reports" element={<KeywordReportsPage />} />
-        <Route path="/keyword-reports/:reportId" element={<ReportDetailPage />} />
-        <Route path="/filters" element={<FiltersPage />} />
-        <Route path="/filters/:filterId" element={<FilterDetailPage />} />
-        <Route path="/portfolio" element={<PortfolioPage />} />
-      </Routes>
+      <main className="flex-1">
+        <Routes>
+          <Route path="/" element={<Navigate to="/keyword-reports" replace />} />
+          <Route path="/keyword-reports" element={<KeywordReportsPage />} />
+          <Route path="/keyword-reports/:reportId" element={<ReportDetailPage />} />
+          <Route path="/filters" element={<FiltersPage />} />
+          <Route path="/filters/:filterId" element={<FilterDetailPage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
+        </Routes>
+      </main>
     </div>
   )
 }

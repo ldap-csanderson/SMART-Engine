@@ -24,7 +24,12 @@ def _conn() -> str:
 
 def _sq(s: str) -> str:
     """Escape a string for embedding inside a BQ single-quoted literal."""
-    return s.replace("\\", "\\\\").replace("'", "\\'")
+    return (
+        s.replace("\\", "\\\\")
+         .replace("'", "\\'")
+         .replace("\n", "\\n")
+         .replace("\r", "\\r")
+    )
 
 def compute_prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode()).hexdigest()[:16]
