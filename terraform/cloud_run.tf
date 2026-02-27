@@ -46,6 +46,13 @@ resource "google_project_iam_member" "backend_vertex_ai" {
   member  = "serviceAccount:${google_service_account.backend.email}"
 }
 
+# Grant backend service account permission to use BigQuery connections (for Vertex AI)
+resource "google_project_iam_member" "backend_bq_connection_user" {
+  project = var.project_id
+  role    = "roles/bigquery.connectionUser"
+  member  = "serviceAccount:${google_service_account.backend.email}"
+}
+
 # Backend Cloud Run service
 resource "google_cloud_run_v2_service" "backend" {
   name     = "gap-analysis-backend"
