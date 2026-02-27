@@ -18,9 +18,4 @@ resource "google_project_iam_member" "connection_vertex_ai_user" {
   depends_on = [google_bigquery_connection.vertex_ai]
 }
 
-# Grant the app service account permission to use the BQ connection
-resource "google_project_iam_member" "app_bq_connection_user" {
-  project = var.project_id
-  role    = "roles/bigquery.connectionUser"
-  member  = "serviceAccount:${google_service_account.keyword_planner.email}"
-}
+# Note: app_bq_connection_user is now defined in cloud_run.tf

@@ -17,9 +17,9 @@ resource "google_secret_manager_secret" "google_ads_yaml" {
   depends_on = [google_project_service.secretmanager]
 }
 
-# Grant backend service account access to the secret
-resource "google_secret_manager_secret_iam_member" "backend_accessor" {
+# Grant app service account access to the secret
+resource "google_secret_manager_secret_iam_member" "app_accessor" {
   secret_id = google_secret_manager_secret.google_ads_yaml.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.backend.email}"
+  member    = "serviceAccount:${google_service_account.app.email}"
 }
