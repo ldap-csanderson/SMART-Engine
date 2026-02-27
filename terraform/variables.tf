@@ -22,14 +22,8 @@ variable "service_account_name" {
   default     = "keyword-planner-sa"
 }
 
-variable "backend_image" {
-  description = "Backend Docker image URL"
+variable "app_image" {
+  description = "Application Docker image URL (includes both frontend and backend)"
   type        = string
-  default     = "us-central1-docker.pkg.dev/gap-analysis-nlf/app/backend:latest"
-}
-
-variable "frontend_image" {
-  description = "Frontend Docker image URL"
-  type        = string
-  default     = "us-central1-docker.pkg.dev/gap-analysis-nlf/app/frontend:latest"
+  default     = "us-central1-docker.pkg.dev/gap-analysis-nlf/app/gap-analysis:latest"
 }

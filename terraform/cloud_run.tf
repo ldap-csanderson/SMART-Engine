@@ -6,61 +6,61 @@ resource "google_project_service" "cloudrun" {
   disable_on_destroy = false
 }
 
-# Service account for backend
-resource "google_service_account" "backend" {
-  account_id   = "gap-analysis-backend"
-  display_name = "Gap Analysis Backend Service Account"
-  description  = "Service account for the Gap Analysis backend Cloud Run service"
+# Service account for the application
+resource "google_service_account" "app" {
+  account_id   = "gap-analysis-app"
+  display_name = "Gap Analysis Application Service Account"
+  description  = "Service account for the Gap Analysis Cloud Run service"
 }
 
-# Grant backend service account access to BigQuery
-resource "google_project_iam_member" "backend_bigquery_user" {
+# Grant service account access to BigQuery
+resource "google_project_iam_member" "app_bigquery_user" {
   project = var.project_id
   role    = "roles/bigquery.user"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-resource "google_project_iam_member" "backend_bigquery_data_editor" {
+resource "google_project_iam_member" "app_bigquery_data_editor" {
   project = var.project_id
   role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-resource "google_project_iam_member" "backend_bigquery_job_user" {
+resource "google_project_iam_member" "app_bigquery_job_user" {
   project = var.project_id
   role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-# Grant backend service account access to Firestore
-resource "google_project_iam_member" "backend_firestore" {
+# Grant service account access to Firestore
+resource "google_project_iam_member" "app_firestore" {
   project = var.project_id
   role    = "roles/datastore.user"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-# Grant backend service account access to Vertex AI
-resource "google_project_iam_member" "backend_vertex_ai" {
+# Grant service account access to Vertex AI
+resource "google_project_iam_member" "app_vertex_ai" {
   project = var.project_id
   role    = "roles/aiplatform.user"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-# Grant backend service account permission to use BigQuery connections (for Vertex AI)
-resource "google_project_iam_member" "backend_bq_connection_user" {
+# Grant service account permission to use BigQuery connections (for Vertex AI)
+resource "google_project_iam_member" "app_bq_connection_user" {
   project = var.project_id
   role    = "roles/bigquery.connectionUser"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+  member  = "serviceAccount:${google_service_account.app.email}"
 }
 
-# Backend Cloud Run service
-resource "google_cloud_run_v2_service" "backend" {
-  name     = "gap-analysis-backend"
+# Cloud Run service (serves both API and frontend)
+resource "google_cloud_run_v2_service" "app" {
+  name     = "gap-analysis"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
   
   template {
-    service_account = google_service_account.backend.email
+    service_account = google_service_account.app.email
     
     scaling {
       min_instance_count = 1
@@ -68,7 +68,7 @@ resource "google_cloud_run_v2_service" "backend" {
     }
     
     containers {
-      image = var.backend_image
+      image = var.app_image
       
       ports {
         container_port = 8000
@@ -116,55 +116,11 @@ resource "google_cloud_run_v2_service" "backend" {
   ]
 }
 
-# Frontend Cloud Run service
-resource "google_cloud_run_v2_service" "frontend" {
-  name     = "gap-analysis-frontend"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
-  
-  template {
-    scaling {
-      min_instance_count = 1
-      max_instance_count = 1
-    }
-    
-    containers {
-      image = var.frontend_image
-      
-      ports {
-        container_port = 80
-      }
-      
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-      }
-    }
-  }
-  
-  traffic {
-    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
-    percent = 100
-  }
-  
-  depends_on = [google_project_service.cloudrun]
-}
-
-# IAM: Allow unauthenticated access to backend
+# IAM: Allow unauthenticated access
 # For production, consider restricting to specific users or Identity-Aware Proxy
-resource "google_cloud_run_v2_service_iam_member" "backend_public" {
-  name     = google_cloud_run_v2_service.backend.name
-  location = google_cloud_run_v2_service.backend.location
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
-# IAM: Allow unauthenticated access to frontend
-resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
-  name     = google_cloud_run_v2_service.frontend.name
-  location = google_cloud_run_v2_service.frontend.location
+resource "google_cloud_run_v2_service_iam_member" "app_public" {
+  name     = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.app.location
   role     = "roles/run.invoker"
   member   = "allUsers"
 }

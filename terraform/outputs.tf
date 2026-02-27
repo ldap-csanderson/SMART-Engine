@@ -29,19 +29,14 @@ output "service_account_key_path" {
   sensitive   = true
 }
 
-output "backend_url" {
-  description = "URL of the backend Cloud Run service"
-  value       = google_cloud_run_v2_service.backend.uri
+output "app_url" {
+  description = "URL of the Cloud Run application (serves both API and frontend)"
+  value       = google_cloud_run_v2_service.app.uri
 }
 
-output "frontend_url" {
-  description = "URL of the frontend Cloud Run service"
-  value       = google_cloud_run_v2_service.frontend.uri
-}
-
-output "backend_service_account" {
-  description = "Email of the backend service account"
-  value       = google_service_account.backend.email
+output "app_service_account" {
+  description = "Email of the application service account"
+  value       = google_service_account.app.email
 }
 
 output "artifact_registry_repository" {

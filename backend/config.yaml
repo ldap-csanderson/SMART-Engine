@@ -37,7 +37,3 @@ api:
   max_urls_per_request: 50
   max_retries: 3
   retry_delay_seconds: 5
-  cors_origins:
-    - "http://localhost:5173"
-    - "http://localhost:3000"
-    - "https://gap-analysis-frontend-256521133044.us-central1.run.app"

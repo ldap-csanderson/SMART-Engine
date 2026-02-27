@@ -1,8 +1,10 @@
 """Main FastAPI application."""
-import yaml
+import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from db import ga_client, bq_client, db, config
 from bq_ml import create_models_if_not_exist
@@ -21,46 +23,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Gap Analysis API", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=config["api"]["cors_origins"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(keyword_reports.router)
-app.include_router(filters.router)
-app.include_router(portfolio.router)
-app.include_router(gap_analysis.router)
-app.include_router(filter_executions.router)
-app.include_router(settings.router)
+# Include API routers with /api prefix
+app.include_router(keyword_reports.router, prefix="/api")
+app.include_router(filters.router, prefix="/api")
+app.include_router(portfolio.router, prefix="/api")
+app.include_router(gap_analysis.router, prefix="/api")
+app.include_router(filter_executions.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
 
 
-@app.get("/")
-def read_root():
-    return {
-        "message": "Gap Analysis API",
-        "endpoints": {
-            "POST /keyword-reports": "Create keyword report",
-            "GET /keyword-reports": "List reports",
-            "GET /keyword-reports/{id}/keywords": "Get keywords for report",
-            "POST /gap-analyses": "Run gap analysis",
-            "GET /gap-analyses": "List analyses",
-            "GET /gap-analyses/{id}/results": "Get analysis results",
-            "GET /portfolio": "Get portfolio",
-            "PUT /portfolio": "Update portfolio",
-            "GET /portfolio/meta": "Portfolio metadata",
-            "GET /settings/prompts": "Get prompts",
-            "PUT /settings/prompts": "Update prompts",
-            "GET /filters": "List filters",
-            "POST /filters": "Create filter",
-            "GET /health": "Health check",
-        },
-    }
-
-
-@app.get("/health")
+@app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
@@ -68,6 +40,28 @@ def health_check():
         "bigquery_connected": bq_client is not None,
         "firestore_connected": db is not None,
     }
+
+
+# Serve static files (React frontend)
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    # Mount static assets (JS/CSS/images)
+    app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+    
+    # Serve index.html for all other routes (SPA routing)
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # Don't intercept API routes
+        if full_path.startswith("api/"):
+            return {"error": "Not found"}, 404
+        
+        # Try to serve the file if it exists
+        file_path = static_dir / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        
+        # Otherwise serve index.html (SPA routing)
+        return FileResponse(static_dir / "index.html")
 
 
 if __name__ == "__main__":

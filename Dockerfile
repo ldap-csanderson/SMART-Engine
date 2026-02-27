@@ -1,14 +1,16 @@
 # Multi-stage build: Build React frontend + Python backend in single container
+# Build from project root, not from backend/
+
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /frontend
 
 # Copy frontend package files
-COPY ../frontend/package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci
 
 # Copy frontend source
-COPY ../frontend/ ./
+COPY frontend/ ./
 
 # Build React app (outputs to /frontend/dist)
 RUN npm run build
@@ -20,11 +22,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install Python dependencies
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend application code
-COPY . .
+COPY backend/ .
 
 # Copy built frontend from previous stage
 COPY --from=frontend-builder /frontend/dist ./static
