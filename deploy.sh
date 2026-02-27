@@ -41,8 +41,8 @@ if [ -z "$BACKEND_URL" ]; then
 fi
 
 gcloud builds submit frontend/ \
-  --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/frontend:latest \
-  --build-arg VITE_API_URL=${BACKEND_URL} \
+  --config=frontend/cloudbuild.yaml \
+  --substitutions=_VITE_API_URL=${BACKEND_URL},_IMAGE_NAME=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/frontend:latest \
   --timeout=15m
 
 echo ""

@@ -1,6 +1,6 @@
 # Gap Analysis
 
-A full-stack application that identifies content gaps between competitor keyword traffic and your portfolio, using Google Ads Keyword Planner + BigQuery ML (Gemini + text embeddings).
+A full-stack application that identifies content gaps between keyword reports and your portfolio, using Google Ads Keyword Planner + BigQuery ML (Gemini + text embeddings).
 
 ## Architecture
 
@@ -193,6 +193,22 @@ Cloud Run will:
 │ • Secret Manager (google-ads.yaml)│
 └─────────────────────────────────┘
 ```
+
+#### API Routing
+
+The frontend uses `/api/*` URLs while the backend serves from root (`/keyword-reports`, not `/api/keyword-reports`). This is handled through a **dual-layer approach**:
+
+1. **JavaScript Fetch Interceptor** (`frontend/src/config.js`):
+   - Overrides `window.fetch` to rewrite `/api/*` → `VITE_API_URL/*`
+   - Enables flexible backend URLs (localhost in dev, Cloud Run in prod)
+   - Injected via `import './config'` in `main.jsx`
+
+2. **Nginx Proxy** (`frontend/nginx.conf`):
+   - Proxies `/api/*` → `backend/*` (strips prefix)
+   - Enables direct API testing via curl/Postman
+   - Configured with hardcoded backend URL for production
+
+This approach requires **zero code changes** across 34 fetch calls in the React app!
 
 **Key Design Decisions:**
 - Both services run with `min_instance_count = 1` and `max_instance_count = 1`

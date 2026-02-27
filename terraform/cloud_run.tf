@@ -72,11 +72,6 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.project_id
       }
       
-      env {
-        name  = "PORT"
-        value = "8000"
-      }
-      
       # Mount google-ads.yaml from Secret Manager
       volume_mounts {
         name       = "google-ads-config"

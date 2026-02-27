@@ -40,4 +40,4 @@ api:
   cors_origins:
     - "http://localhost:5173"
     - "http://localhost:3000"
-    - "https://gap-analysis-frontend-*.run.app"
+    - "https://gap-analysis-frontend-256521133044.us-central1.run.app"
