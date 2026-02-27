@@ -38,9 +38,14 @@ credentials_path = os.getenv("GCP_SERVICE_ACCOUNT_KEY_PATH")
 if credentials_path:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
+# Google Ads client - check for Cloud Run secret mount first, then fall back to local path
+google_ads_config_path = "/secrets/google-ads.yaml"
+if not os.path.exists(google_ads_config_path):
+    google_ads_config_path = config["google_ads"]["config_path"]
+
 try:
-    ga_client = GoogleAdsClient.load_from_storage(config["google_ads"]["config_path"])
-    print("✅ Connected to Google Ads API")
+    ga_client = GoogleAdsClient.load_from_storage(google_ads_config_path)
+    print(f"✅ Connected to Google Ads API (config: {google_ads_config_path})")
 except Exception as e:
     print(f"❌ Failed to load Google Ads client: {e}")
     ga_client = None

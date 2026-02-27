@@ -78,7 +78,187 @@ All analysis results are designed to be immutable with respect to their inputs:
 - GCP project with billing enabled
 - Google Ads Developer Token + `scripts/google-ads.yaml`
 
-## Quick Start
+## Deployment Options
+
+This application can be deployed in two ways:
+
+1. **Cloud Run (GCP)** - Recommended for easy deployment with auto-scaling
+2. **Local/VPS** - For development or self-hosted environments
+
+---
+
+## Cloud Run Deployment (Production)
+
+Deploy both frontend and backend to Google Cloud Run with a single command.
+
+### Prerequisites
+
+- `gcloud` CLI authenticated: `gcloud auth login`
+- `gcloud` configured for billing account
+- Project ID: `gap-analysis-nlf` (or update in `deploy.sh` and `terraform/variables.tf`)
+
+### Initial Setup (One-Time)
+
+#### 1. Upload Google Ads Config to Secret Manager
+
+```bash
+gcloud secrets create google-ads-yaml \
+  --data-file=scripts/google-ads.yaml \
+  --replication-policy=automatic \
+  --project=gap-analysis-nlf
+```
+
+This secret is automatically mounted to the backend Cloud Run container at `/secrets/google-ads.yaml`.
+
+#### 2. Enable Required APIs
+
+```bash
+cd terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+Creates:
+- BigQuery dataset/tables
+- Firestore database + composite indexes
+- Vertex AI connection
+- Artifact Registry for Docker images
+- Secret Manager configuration
+- Service accounts with IAM permissions
+
+#### 3. Deploy Application
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+The script will:
+1. Build backend Docker image and push to Artifact Registry
+2. Build frontend Docker image (with backend URL baked in) and push to Artifact Registry
+3. Deploy both services to Cloud Run via Terraform
+4. Display service URLs
+
+**Initial deployment takes ~5-10 minutes.** Subsequent deployments take ~2-3 minutes.
+
+### Accessing Your Deployment
+
+After deployment completes, you'll see:
+
+```
+✅ Deployment complete!
+
+📋 Service URLs:
+   Frontend: https://gap-analysis-frontend-xxxxx-uc.a.run.app
+   Backend:  https://gap-analysis-backend-xxxxx-uc.a.run.app
+```
+
+Visit the frontend URL in your browser.
+
+### Updating the Application
+
+After making code changes, simply run:
+
+```bash
+./deploy.sh
+```
+
+Cloud Run will:
+- Build new images
+- Deploy with zero downtime
+- Switch traffic automatically
+
+### Architecture
+
+```
+┌─────────────────────┐
+│ Cloud Run (Frontend)│
+│  Nginx + React SPA  │
+└──────────┬──────────┘
+           │
+           ↓ (calls /api/*)
+┌─────────────────────┐
+│ Cloud Run (Backend) │
+│  FastAPI + uvicorn  │
+│  min/max: 1 instance│
+└──────────┬──────────┘
+           │
+           ↓ (uses)
+┌─────────────────────────────────┐
+│ GCP Services                    │
+│ • BigQuery (analytics data)     │
+│ • Firestore (metadata)          │
+│ • Vertex AI (Gemini + embeddings)│
+│ • Secret Manager (google-ads.yaml)│
+└─────────────────────────────────┘
+```
+
+**Key Design Decisions:**
+- Both services run with `min_instance_count = 1` and `max_instance_count = 1`
+- Single instance ensures background tasks complete without interruption
+- Backend uses FastAPI BackgroundTasks (no Celery/Redis needed)
+- Secrets mounted as volume from Secret Manager
+- CORS configured for Cloud Run URLs
+
+### Cost Estimate
+
+With min/max = 1 instance (always running):
+- **Cloud Run**: ~$20-30/month (2 vCPU backend + 1 vCPU frontend, idle most of the time)
+- **BigQuery**: Pay per query (existing cost)
+- **Firestore**: Free tier covers typical usage
+- **Artifact Registry**: ~$0.10/GB storage
+- **Secret Manager**: $0.06/secret/month
+
+To reduce costs, remove `min_instance_count = 1` in `terraform/cloud_run.tf` (allows scale to zero, but background tasks may be interrupted).
+
+### Troubleshooting
+
+**View backend logs:**
+```bash
+gcloud run services logs read gap-analysis-backend --region=us-central1 --limit=50
+```
+
+**View frontend logs:**
+```bash
+gcloud run services logs read gap-analysis-frontend --region=us-central1 --limit=50
+```
+
+**Describe services:**
+```bash
+gcloud run services describe gap-analysis-backend --region=us-central1
+gcloud run services describe gap-analysis-frontend --region=us-central1
+```
+
+**Re-upload Google Ads secret (if expired):**
+```bash
+gcloud secrets versions add google-ads-yaml --data-file=scripts/google-ads.yaml
+```
+
+### Security
+
+The services are currently configured with `allUsers` invoker permissions (public access). To restrict access:
+
+1. Edit `terraform/cloud_run.tf` and change:
+   ```hcl
+   member   = "allUsers"
+   ```
+   to:
+   ```hcl
+   member   = "user:your-email@example.com"
+   # or
+   member   = "domain:example.com"
+   ```
+
+2. Re-apply: `cd terraform && terraform apply`
+
+Alternatively, configure [Identity-Aware Proxy](https://cloud.google.com/iap/docs/enabling-cloud-run) for enterprise authentication.
+
+---
+
+## Local Development
+
+For local development or self-hosted VPS deployment.
 
 ### 1. Deploy Infrastructure
 

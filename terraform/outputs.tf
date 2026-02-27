@@ -28,3 +28,23 @@ output "service_account_key_path" {
   value       = local_file.service_account_key.filename
   sensitive   = true
 }
+
+output "backend_url" {
+  description = "URL of the backend Cloud Run service"
+  value       = google_cloud_run_v2_service.backend.uri
+}
+
+output "frontend_url" {
+  description = "URL of the frontend Cloud Run service"
+  value       = google_cloud_run_v2_service.frontend.uri
+}
+
+output "backend_service_account" {
+  description = "Email of the backend service account"
+  value       = google_service_account.backend.email
+}
+
+output "artifact_registry_repository" {
+  description = "Artifact Registry repository URL"
+  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.app.repository_id}"
+}
