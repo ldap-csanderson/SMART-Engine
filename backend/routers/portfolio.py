@@ -1,11 +1,11 @@
-"""Portfolio endpoints — stored entirely in Firestore (portfolio/default)."""
+"""Portfolio endpoints — stored in Firestore (portfolio/default) and synced to BigQuery."""
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from google.cloud import firestore
 from pydantic import BaseModel
 
-from db import db, ts_to_str
+from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_PORTFOLIO_ITEMS
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -50,10 +50,36 @@ def update_portfolio(payload: PortfolioUpdate):
         raise HTTPException(503, "Firestore not initialized")
     try:
         unique_items = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
+        
+        # Update Firestore
         db.collection("portfolio").document("default").set({
             "items": unique_items,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
+        
+        # Sync to BigQuery portfolio_items table
+        if bq_client:
+            try:
+                # Clear existing items
+                bq_client.query(
+                    f"DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS}` WHERE TRUE"
+                ).result()
+                
+                # Insert new items (if any)
+                if unique_items:
+                    values = ", ".join(
+                        f"('{item.replace(chr(39), chr(39)+chr(39))}', CURRENT_TIMESTAMP())"
+                        for item in unique_items
+                    )
+                    bq_client.query(
+                        f"INSERT INTO `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS}` "
+                        f"(item_text, added_at) VALUES {values}"
+                    ).result()
+                print(f"✅ Synced {len(unique_items)} portfolio items to BigQuery")
+            except Exception as e:
+                print(f"⚠️ Failed to sync portfolio to BigQuery: {e}")
+                # Don't fail the request if BQ sync fails
+        
         # Re-fetch to get the SERVER_TIMESTAMP value
         d = db.collection("portfolio").document("default").get().to_dict()
         items = d.get("items", [])
