@@ -57,6 +57,7 @@ Examples:
 class GapAnalysisCreate(BaseModel):
     report_id: str
     name: str
+    portfolio_id: str
     filter_ids: Optional[List[str]] = None
 
 
@@ -136,7 +137,7 @@ def _run_filter_execution(execution_id: str, analysis_id: str, filter_snapshot: 
             pass
 
 
-def _run_analysis_background(analysis_id: str, report_id: str, filter_ids: Optional[List[str]] = None):
+def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str, filter_ids: Optional[List[str]] = None):
     """Background task: run the full gap analysis pipeline, then any chained filters."""
     print(f"🔄 Gap analysis {analysis_id} started")
     try:
@@ -144,6 +145,7 @@ def _run_analysis_background(analysis_id: str, report_id: str, filter_ids: Optio
         count = run_gap_analysis_pipeline(
             analysis_id=analysis_id,
             report_id=report_id,
+            portfolio_id=portfolio_id,
             keyword_prompt=prompts["keyword_intent_prompt"],
             portfolio_prompt=prompts["portfolio_intent_prompt"],
         )
@@ -209,13 +211,25 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     if not report_doc.exists:
         raise HTTPException(404, f"Keyword report {payload.report_id} not found")
 
-    # Check portfolio is not empty
-    portfolio_count = bq_client.query(
-        f"SELECT COUNT(*) FROM `{PROJECT_ID}.{DATASET_ID}.portfolio_items`"
-    ).result()
-    count = list(portfolio_count)[0][0]
-    if count == 0:
+    # Verify the portfolio exists and fetch it
+    portfolio_doc = db.collection("portfolios").document(payload.portfolio_id).get()
+    if not portfolio_doc.exists:
+        raise HTTPException(404, f"Portfolio {payload.portfolio_id} not found")
+    
+    portfolio_data = portfolio_doc.to_dict()
+    portfolio_items = portfolio_data.get("items", [])
+    
+    if len(portfolio_items) == 0:
         raise HTTPException(400, "Portfolio is empty. Add items to the portfolio before running an analysis.")
+
+    # Create immutable portfolio snapshot
+    portfolio_snapshot = {
+        "portfolio_id": payload.portfolio_id,
+        "name": portfolio_data["name"],
+        "items": portfolio_items,
+        "created_at": ts_to_str(portfolio_data["created_at"]),
+        "updated_at": ts_to_str(portfolio_data["updated_at"]),
+    }
 
     # Validate filter IDs if provided
     if payload.filter_ids:
@@ -228,13 +242,15 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "analysis_id": analysis_id,
         "name": payload.name,
         "report_id": payload.report_id,
+        "portfolio_id": payload.portfolio_id,
+        "portfolio_snapshot": portfolio_snapshot,
         "status": "processing",
         "created_at": firestore.SERVER_TIMESTAMP,
         "total_keywords_analyzed": 0,
         "error_message": None,
     })
     background_tasks.add_task(
-        _run_analysis_background, analysis_id, payload.report_id, payload.filter_ids
+        _run_analysis_background, analysis_id, payload.report_id, payload.portfolio_id, payload.filter_ids
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
