@@ -6,7 +6,8 @@ import GapAnalysesPage from './pages/GapAnalysesPage'
 import GapAnalysisDetailPage from './pages/GapAnalysisDetailPage'
 import FiltersPage from './pages/FiltersPage'
 import FilterDetailPage from './pages/FilterDetailPage'
-import PortfolioPage from './pages/PortfolioPage'
+import PortfoliosPage from './pages/PortfoliosPage'
+import PortfolioDetailPage from './pages/PortfolioDetailPage'
 
 function App() {
   return (
@@ -21,7 +22,8 @@ function App() {
           <Route path="/gap-analyses/:analysisId" element={<GapAnalysisDetailPage />} />
           <Route path="/filters" element={<FiltersPage />} />
           <Route path="/filters/:filterId" element={<FilterDetailPage />} />
-          <Route path="/portfolio" element={<PortfolioPage />} />
+          <Route path="/portfolios" element={<PortfoliosPage />} />
+          <Route path="/portfolios/:id" element={<PortfolioDetailPage />} />
         </Routes>
       </main>
     </div>
