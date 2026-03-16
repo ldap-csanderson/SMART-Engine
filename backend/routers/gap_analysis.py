@@ -61,10 +61,19 @@ class GapAnalysisCreate(BaseModel):
     filter_ids: Optional[List[str]] = None
 
 
+class PortfolioSnapshot(BaseModel):
+    portfolio_id: str
+    name: str
+    items: List[str]
+    created_at: str
+    updated_at: str
+
+
 class GapAnalysis(BaseModel):
     analysis_id: str
     name: str
     report_id: str
+    portfolio_snapshot: Optional[PortfolioSnapshot] = None
     status: str
     created_at: str
     total_keywords_analyzed: int
@@ -254,9 +263,14 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
+    snapshot_data = doc.get("portfolio_snapshot")
+    snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+    
     return GapAnalysis(
         analysis_id=doc["analysis_id"], name=doc["name"],
-        report_id=doc["report_id"], status=doc["status"],
+        report_id=doc["report_id"],
+        portfolio_snapshot=snapshot,
+        status=doc["status"],
         created_at=ts_to_str(doc["created_at"]),
         total_keywords_analyzed=doc["total_keywords_analyzed"],
     )
@@ -286,9 +300,15 @@ def list_gap_analyses(report_id: Optional[str] = None, status: Optional[str] = N
             else:
                 if doc_status == "archived":
                     continue
+            
+            snapshot_data = d.get("portfolio_snapshot")
+            snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+            
             analyses.append(GapAnalysis(
                 analysis_id=d["analysis_id"], name=d.get("name", ""),
-                report_id=d["report_id"], status=doc_status,
+                report_id=d["report_id"],
+                portfolio_snapshot=snapshot,
+                status=doc_status,
                 created_at=ts_to_str(d["created_at"]),
                 total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
                 error_message=d.get("error_message"),
@@ -306,9 +326,15 @@ def get_gap_analysis(analysis_id: str):
     if not doc.exists:
         raise HTTPException(404, f"Analysis {analysis_id} not found")
     d = doc.to_dict()
+    
+    snapshot_data = d.get("portfolio_snapshot")
+    snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+    
     return GapAnalysis(
         analysis_id=d["analysis_id"], name=d.get("name", ""),
-        report_id=d["report_id"], status=d["status"],
+        report_id=d["report_id"],
+        portfolio_snapshot=snapshot,
+        status=d["status"],
         created_at=ts_to_str(d["created_at"]),
         total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
         error_message=d.get("error_message"),
