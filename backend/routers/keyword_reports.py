@@ -10,7 +10,7 @@ from google.cloud import firestore
 from pydantic import BaseModel
 
 from db import (
-    ga_client, bq_client, db, ts_to_str,
+    ga_client, ga_auth_manager, bq_client, db, ts_to_str,
     CUSTOMER_ID, MAX_RETRIES, RETRY_DELAY,
     PROJECT_ID, DATASET_ID, T_RESULTS, config,
 )
@@ -87,7 +87,7 @@ def _insert_keywords_to_bq(report_id: str, url: str, keywords: List[Dict[str, An
         print(f"✅ Inserted {len(rows)} keywords to BQ")
 
 
-def _fetch_keyword_ideas(client, customer_id: str, url: str, retry: int = 0) -> List[Dict]:
+def _fetch_keyword_ideas(client, customer_id: str, url: str, retry: int = 0, auth_retry: bool = False) -> List[Dict]:
     keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
     request = client.get_type("GenerateKeywordIdeasRequest")
     request.customer_id = customer_id
@@ -110,11 +110,37 @@ def _fetch_keyword_ideas(client, customer_id: str, url: str, retry: int = 0) -> 
                 "high_top_of_page_bid_usd": m.high_top_of_page_bid_micros / 1_000_000 if m and m.high_top_of_page_bid_micros else None,
             })
         return ideas
-    except (GoogleAdsException, Exception) as ex:
+    except GoogleAdsException as ex:
+        # Check if this is an authentication error (401/UNAUTHENTICATED)
+        error_msg = str(ex)
+        is_auth_error = (
+            "UNAUTHENTICATED" in error_msg or 
+            "401" in error_msg or
+            "invalid_grant" in error_msg or
+            "Request had invalid authentication credentials" in error_msg
+        )
+        
+        if is_auth_error and not auth_retry and ga_auth_manager:
+            print(f"🔄 Authentication error detected, attempting to refresh token...")
+            if ga_auth_manager.handle_auth_error():
+                # Token refreshed successfully, retry with new client
+                refreshed_client = ga_auth_manager.client
+                if refreshed_client:
+                    print(f"✅ Retrying request with refreshed token...")
+                    return _fetch_keyword_ideas(refreshed_client, customer_id, url, retry, auth_retry=True)
+            else:
+                print(f"❌ Failed to refresh authentication token")
+        
         print(f"❌ Error fetching keywords: {ex}")
         if retry < MAX_RETRIES:
             time.sleep(RETRY_DELAY)
-            return _fetch_keyword_ideas(client, customer_id, url, retry + 1)
+            return _fetch_keyword_ideas(client, customer_id, url, retry + 1, auth_retry)
+        return []
+    except Exception as ex:
+        print(f"❌ Error fetching keywords: {ex}")
+        if retry < MAX_RETRIES:
+            time.sleep(RETRY_DELAY)
+            return _fetch_keyword_ideas(client, customer_id, url, retry + 1, auth_retry)
         return []
 
 

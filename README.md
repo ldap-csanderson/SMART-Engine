@@ -78,6 +78,21 @@ All analysis results are designed to be immutable with respect to their inputs:
 - GCP project with billing enabled
 - Google Ads Developer Token + `scripts/google-ads.yaml`
 
+## Google Ads Authentication
+
+The application uses OAuth 2.0 for Google Ads API access with automatic token refresh. Your `google-ads.yaml` must include:
+
+```yaml
+client_id: "YOUR_CLIENT_ID"
+client_secret: "YOUR_CLIENT_SECRET"
+refresh_token: "YOUR_REFRESH_TOKEN"
+access_token: "YOUR_ACCESS_TOKEN"  # Auto-updated when expired
+developer_token: "YOUR_DEVELOPER_TOKEN"
+login_customer_id: "YOUR_CUSTOMER_ID"
+```
+
+**Token Refresh:** When the access token expires (typically after 1 hour), the system automatically refreshes it using the refresh token and retries failed requests. The refresh token is long-lived and doesn't expire unless revoked. This prevents daily authentication failures in your keyword reports.
+
 ## Deployment Options
 
 This application can be deployed in two ways:

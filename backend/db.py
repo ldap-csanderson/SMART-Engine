@@ -1,8 +1,8 @@
 """Shared clients and configuration constants."""
 import os
 import yaml
-from google.ads.googleads.client import GoogleAdsClient
 from google.cloud import bigquery, firestore
+from google_ads_auth import GoogleAdsAuthManager
 
 # Load configuration
 with open("config.yaml", "r") as f:
@@ -38,17 +38,23 @@ credentials_path = os.getenv("GCP_SERVICE_ACCOUNT_KEY_PATH")
 if credentials_path:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
-# Google Ads client - check for Cloud Run secret mount first, then fall back to local path
+# Google Ads client with auth manager - check for Cloud Run secret mount first, then fall back to local path
 google_ads_config_path = "/secrets/google-ads.yaml"
 if not os.path.exists(google_ads_config_path):
     google_ads_config_path = config["google_ads"]["config_path"]
 
 try:
-    ga_client = GoogleAdsClient.load_from_storage(google_ads_config_path)
-    print(f"✅ Connected to Google Ads API (config: {google_ads_config_path})")
+    ga_auth_manager = GoogleAdsAuthManager(google_ads_config_path)
+    ga_client = ga_auth_manager.client
+    if ga_client:
+        print(f"✅ Connected to Google Ads API (config: {google_ads_config_path})")
+    else:
+        print(f"❌ Failed to initialize Google Ads client")
+        ga_auth_manager = None
 except Exception as e:
     print(f"❌ Failed to load Google Ads client: {e}")
     ga_client = None
+    ga_auth_manager = None
 
 try:
     bq_client = bigquery.Client(project=PROJECT_ID)
