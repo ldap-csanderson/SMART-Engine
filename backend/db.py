@@ -2,7 +2,7 @@
 import os
 import yaml
 from google.cloud import bigquery, firestore
-from google_ads_auth import GoogleAdsAuthManager
+import google_ads_auth
 
 # Load configuration
 with open("config.yaml", "r") as f:
@@ -44,7 +44,7 @@ if not os.path.exists(google_ads_config_path):
     google_ads_config_path = config["google_ads"]["config_path"]
 
 try:
-    ga_auth_manager = GoogleAdsAuthManager(google_ads_config_path)
+    ga_auth_manager = google_ads_auth.GoogleAdsAuthManager(google_ads_config_path)
     ga_client = ga_auth_manager.client
     if ga_client:
         print(f"✅ Connected to Google Ads API (config: {google_ads_config_path})")
