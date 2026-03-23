@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from google.cloud import firestore
 from pydantic import BaseModel
 
-from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_GAP_ANALYSIS, T_FILTER_RESULTS
+from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_GAP_ANALYSIS, T_FILTER_RESULTS, T_RESULTS
 from bq_ml import run_gap_analysis_pipeline, run_filter_pipeline
 
 router = APIRouter(prefix="/gap-analyses", tags=["gap-analysis"])
@@ -155,6 +155,23 @@ def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str
     """Background task: run the full gap analysis pipeline, then any chained filters."""
     print(f"🔄 Gap analysis {analysis_id} started")
     try:
+        # Pre-count keywords from the report so the list shows the correct count while processing
+        if bq_client:
+            try:
+                results_table = f"`{PROJECT_ID}.{DATASET_ID}.{T_RESULTS}`"
+                kw_rows = bq_client.query(f"""
+                    SELECT COUNT(DISTINCT keyword_text)
+                    FROM {results_table}
+                    WHERE run_id = '{report_id}'
+                """).result()
+                kw_count = list(kw_rows)[0][0] or 0
+                db.collection("gap_analyses").document(analysis_id).update({
+                    "total_keywords_analyzed": kw_count,
+                })
+                print(f"📊 Pre-counted {kw_count} keywords for report {report_id}")
+            except Exception as _e:
+                print(f"⚠️ Could not pre-count keywords: {_e}")
+
         prompts = _get_prompts()
         count = run_gap_analysis_pipeline(
             analysis_id=analysis_id,
