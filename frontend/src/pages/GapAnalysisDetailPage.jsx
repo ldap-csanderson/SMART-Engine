@@ -64,6 +64,7 @@ export default function GapAnalysisDetailPage() {
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
   const [portfolioSnapshot, setPortfolioSnapshot] = useState(null)
   const loadedFilterResultsRef = useRef(new Set())
+  const [expandedRows, setExpandedRows] = useState(new Set())
 
   // Poll executions every 2s while any are processing; load results as they complete
   useEffect(() => {
@@ -250,6 +251,18 @@ export default function GapAnalysisDetailPage() {
     else setHighlightInput(String(highlightThreshold))
   }
 
+  const toggleRow = (idx) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) {
+        next.delete(idx)
+      } else {
+        next.add(idx)
+      }
+      return next
+    })
+  }
+
   // Client-side min_searches filter
   const displayedResults = results.filter(
     (r) => (r.avg_monthly_searches ?? 0) >= minSearches
@@ -330,7 +343,7 @@ export default function GapAnalysisDetailPage() {
         {/* Controls panel */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex flex-wrap gap-6 items-start">
-            {/* Filter toggles */}
+            {/* Filter to toggles */}
             {completedExecs.length > 0 && (
               <div className="flex-1 min-w-[260px]">
                 <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
@@ -474,9 +487,9 @@ export default function GapAnalysisDetailPage() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold text-gray-700">Keyword</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Distance</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Searches/mo</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-700">Top Portfolio Matches</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Distance</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-700">Closest Portfolio Item</th>
                   {completedExecs.map((e) => (
                     <th key={e.execution_id} className="text-center px-3 py-3 font-semibold text-gray-700 whitespace-nowrap">
                       {e.filter_snapshot.name}
@@ -487,58 +500,63 @@ export default function GapAnalysisDetailPage() {
               <tbody className="divide-y divide-gray-100">
                 {displayedResults.map((row, i) => {
                   const isHighlighted = (row.semantic_distance ?? 0) >= highlightThreshold
+                  const isExpanded = expandedRows.has(i)
+                  const closestMatch = row.portfolio_matches?.[0]
+                  const hasMultipleMatches = row.portfolio_matches && row.portfolio_matches.length > 1
+
                   return (
-                    <tr
-                      key={i}
-                      className={isHighlighted ? 'bg-yellow-50' : 'hover:bg-gray-50'}
-                    >
-                      <td className="px-4 py-2.5 font-medium text-gray-900">{row.keyword_text}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">
-                        <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
-                          isHighlighted ? 'bg-yellow-200 text-yellow-800' : 'text-gray-600'
-                        }`}>
-                          {row.semantic_distance?.toFixed(3) ?? '—'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
-                        {row.avg_monthly_searches?.toLocaleString() ?? '—'}
-                      </td>
-                      <td className="px-4 py-2.5 max-w-xs">
-                        {row.portfolio_matches && row.portfolio_matches.length > 0 ? (
-                          <div className="space-y-0.5">
-                            {row.portfolio_matches.map((match, idx) => (
-                              <div key={idx} className="flex items-baseline gap-1.5">
-                                <span
-                                  className={`truncate ${idx === 0 ? 'text-gray-700' : 'text-gray-400 text-xs'}`}
-                                  title={match.item}
-                                >
-                                  {match.item}
-                                </span>
-                                {idx > 0 && (
-                                  <span className="text-gray-300 font-mono text-xs shrink-0">
+                    <>
+                      <tr
+                        key={i}
+                        onClick={() => hasMultipleMatches && toggleRow(i)}
+                        className={`${isHighlighted ? 'bg-yellow-50' : 'hover:bg-gray-50'} ${hasMultipleMatches ? 'cursor-pointer' : ''}`}
+                      >
+                        <td className="px-4 py-2.5 font-medium text-gray-900">{row.keyword_text}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
+                          {row.avg_monthly_searches?.toLocaleString() ?? '—'}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">
+                          <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
+                            isHighlighted ? 'bg-yellow-200 text-yellow-800' : 'text-gray-600'
+                          }`}>
+                            {row.semantic_distance?.toFixed(3) ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-gray-500 max-w-xs truncate" title={closestMatch?.item}>
+                          {closestMatch?.item || '—'}
+                        </td>
+                        {completedExecs.map((e) => {
+                          const val = filterResultsMap[e.execution_id]?.[row.keyword_text]
+                          return (
+                            <td key={e.execution_id} className="px-3 py-2.5 text-center">
+                              {val === true ? (
+                                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-xs font-bold">✓</span>
+                              ) : val === false ? (
+                                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-xs font-bold">✗</span>
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                      {isExpanded && hasMultipleMatches && (
+                        <tr key={`${i}-expanded`} className={isHighlighted ? 'bg-yellow-50' : 'bg-gray-50'}>
+                          <td colSpan={4 + completedExecs.length} className="px-4 py-3">
+                            <div className="text-xs text-gray-600 space-y-1">
+                              {row.portfolio_matches.map((match, idx) => (
+                                <div key={idx} className="flex gap-3">
+                                  <span className="font-mono text-gray-400 w-14 text-right shrink-0">
                                     {match.distance?.toFixed(3)}
                                   </span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : '—'}
-                      </td>
-                      {completedExecs.map((e) => {
-                        const val = filterResultsMap[e.execution_id]?.[row.keyword_text]
-                        return (
-                          <td key={e.execution_id} className="px-3 py-2.5 text-center">
-                            {val === true ? (
-                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-xs font-bold">✓</span>
-                            ) : val === false ? (
-                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-xs font-bold">✗</span>
-                            ) : (
-                              <span className="text-gray-300">—</span>
-                            )}
+                                  <span className="text-gray-600">{match.item}</span>
+                                </div>
+                              ))}
+                            </div>
                           </td>
-                        )
-                      })}
-                    </tr>
+                        </tr>
+                      )}
+                    </>
                   )
                 })}
               </tbody>
