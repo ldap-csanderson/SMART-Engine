@@ -476,7 +476,7 @@ export default function GapAnalysisDetailPage() {
                   <th className="text-left px-4 py-3 font-semibold text-gray-700">Keyword</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Distance</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Searches/mo</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-700">Closest Portfolio Item</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-700">Top Portfolio Matches</th>
                   {completedExecs.map((e) => (
                     <th key={e.execution_id} className="text-center px-3 py-3 font-semibold text-gray-700 whitespace-nowrap">
                       {e.filter_snapshot.name}
@@ -503,8 +503,26 @@ export default function GapAnalysisDetailPage() {
                       <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
                         {row.avg_monthly_searches?.toLocaleString() ?? '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-gray-500 max-w-xs truncate" title={row.closest_portfolio_item}>
-                        {row.closest_portfolio_item || '—'}
+                      <td className="px-4 py-2.5 max-w-xs">
+                        {row.portfolio_matches && row.portfolio_matches.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {row.portfolio_matches.map((match, idx) => (
+                              <div key={idx} className="flex items-baseline gap-1.5">
+                                <span
+                                  className={`truncate ${idx === 0 ? 'text-gray-700' : 'text-gray-400 text-xs'}`}
+                                  title={match.item}
+                                >
+                                  {match.item}
+                                </span>
+                                {idx > 0 && (
+                                  <span className="text-gray-300 font-mono text-xs shrink-0">
+                                    {match.distance?.toFixed(3)}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : '—'}
                       </td>
                       {completedExecs.map((e) => {
                         const val = filterResultsMap[e.execution_id]?.[row.keyword_text]
