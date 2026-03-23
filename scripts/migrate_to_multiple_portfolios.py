@@ -105,25 +105,26 @@ def main():
     
     if len(items) > 0:
         if not args.dry_run:
-            # Build VALUES for bulk insert
-            values_list = []
-            for item in items:
-                # Escape single quotes for SQL
-                item_escaped = item.replace("'", "''")
-                values_list.append(
-                    f"('{portfolio_id}', '{item_escaped}', CURRENT_TIMESTAMP())"
-                )
-            
-            values_sql = ", ".join(values_list)
-            query = f"""
-                INSERT INTO `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS_V2}`
-                (portfolio_id, item_text, added_at)
-                VALUES {values_sql}
-            """
-            
-            job = bq_client.query(query)
-            job.result()
-            print(f"✅ Inserted {len(items)} items into BigQuery")
+            # Use streaming inserts to avoid SQL escaping issues with special characters
+            table_ref = f"{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS_V2}"
+            table = bq_client.get_table(table_ref)
+            now = datetime.now(timezone.utc).isoformat()
+
+            rows_to_insert = [
+                {"portfolio_id": portfolio_id, "item_text": item, "added_at": now}
+                for item in items
+            ]
+
+            batch_size = 500
+            total_inserted = 0
+            for i in range(0, len(rows_to_insert), batch_size):
+                batch = rows_to_insert[i:i+batch_size]
+                errors = bq_client.insert_rows_json(table, batch)
+                if errors:
+                    print(f"   ⚠️  Errors in batch {i//batch_size + 1}: {errors[:3]}")
+                else:
+                    total_inserted += len(batch)
+            print(f"✅ Inserted {total_inserted} items into BigQuery")
         else:
             print(f"   Would insert {len(items)} items")
             print(f"   Sample: {items[:3]}")
