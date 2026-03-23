@@ -53,7 +53,7 @@ export default function GapAnalysisDetailPage() {
   const [highlightInput, setHighlightInput] = useState('0.2')
 
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
-  const [portfolioCount, setPortfolioCount] = useState(0)
+  const [portfolioSnapshot, setPortfolioSnapshot] = useState(null)
   const loadedFilterResultsRef = useRef(new Set())
 
   // Poll executions every 2s while any are processing; load results as they complete
@@ -103,23 +103,22 @@ export default function GapAnalysisDetailPage() {
       setPageLoading(true)
       setError(null)
       try {
-        const [analysisRes, execsRes, portfolioRes] = await Promise.all([
+        const [analysisRes, execsRes] = await Promise.all([
           fetch(`/api/gap-analyses/${analysisId}`),
           fetch(`/api/gap-analyses/${analysisId}/filter-executions`),
-          fetch('/api/portfolio/meta'),
         ])
         if (!analysisRes.ok) throw new Error('Analysis not found')
         const analysisData = await analysisRes.json()
         setAnalysis(analysisData)
 
+        // Extract portfolio snapshot from analysis
+        if (analysisData.portfolio_snapshot) {
+          setPortfolioSnapshot(analysisData.portfolio_snapshot)
+        }
+
         const execsData = execsRes.ok ? await execsRes.json() : { executions: [] }
         const execs = execsData.executions || []
         setExecutions(execs)
-
-        if (portfolioRes.ok) {
-          const portfolioData = await portfolioRes.json()
-          setPortfolioCount(portfolioData.total_items || 0)
-        }
 
         // Init filter modes to 'any'
         const modes = {}
@@ -278,8 +277,12 @@ export default function GapAnalysisDetailPage() {
             </span>
             <span>·</span>
             <span>{totalCount.toLocaleString()} keywords</span>
-            <span>·</span>
-            <span>{portfolioCount} portfolio items</span>
+            {portfolioSnapshot && (
+              <>
+                <span>·</span>
+                <span>{portfolioSnapshot.items?.length || 0} portfolio items ({portfolioSnapshot.name})</span>
+              </>
+            )}
             {executions.length > 0 && (
               <>
                 <span>·</span>

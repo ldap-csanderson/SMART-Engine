@@ -57,13 +57,23 @@ Examples:
 class GapAnalysisCreate(BaseModel):
     report_id: str
     name: str
+    portfolio_id: str
     filter_ids: Optional[List[str]] = None
+
+
+class PortfolioSnapshot(BaseModel):
+    portfolio_id: str
+    name: str
+    items: List[str]
+    created_at: str
+    updated_at: str
 
 
 class GapAnalysis(BaseModel):
     analysis_id: str
     name: str
     report_id: str
+    portfolio_snapshot: Optional[PortfolioSnapshot] = None
     status: str
     created_at: str
     total_keywords_analyzed: int
@@ -136,7 +146,7 @@ def _run_filter_execution(execution_id: str, analysis_id: str, filter_snapshot: 
             pass
 
 
-def _run_analysis_background(analysis_id: str, report_id: str, filter_ids: Optional[List[str]] = None):
+def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str, filter_ids: Optional[List[str]] = None):
     """Background task: run the full gap analysis pipeline, then any chained filters."""
     print(f"🔄 Gap analysis {analysis_id} started")
     try:
@@ -144,6 +154,7 @@ def _run_analysis_background(analysis_id: str, report_id: str, filter_ids: Optio
         count = run_gap_analysis_pipeline(
             analysis_id=analysis_id,
             report_id=report_id,
+            portfolio_id=portfolio_id,
             keyword_prompt=prompts["keyword_intent_prompt"],
             portfolio_prompt=prompts["portfolio_intent_prompt"],
         )
@@ -209,13 +220,25 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     if not report_doc.exists:
         raise HTTPException(404, f"Keyword report {payload.report_id} not found")
 
-    # Check portfolio is not empty
-    portfolio_count = bq_client.query(
-        f"SELECT COUNT(*) FROM `{PROJECT_ID}.{DATASET_ID}.portfolio_items`"
-    ).result()
-    count = list(portfolio_count)[0][0]
-    if count == 0:
+    # Verify the portfolio exists and fetch it
+    portfolio_doc = db.collection("portfolios").document(payload.portfolio_id).get()
+    if not portfolio_doc.exists:
+        raise HTTPException(404, f"Portfolio {payload.portfolio_id} not found")
+    
+    portfolio_data = portfolio_doc.to_dict()
+    portfolio_items = portfolio_data.get("items", [])
+    
+    if len(portfolio_items) == 0:
         raise HTTPException(400, "Portfolio is empty. Add items to the portfolio before running an analysis.")
+
+    # Create immutable portfolio snapshot
+    portfolio_snapshot = {
+        "portfolio_id": payload.portfolio_id,
+        "name": portfolio_data["name"],
+        "items": portfolio_items,
+        "created_at": ts_to_str(portfolio_data["created_at"]),
+        "updated_at": ts_to_str(portfolio_data["updated_at"]),
+    }
 
     # Validate filter IDs if provided
     if payload.filter_ids:
@@ -228,19 +251,26 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "analysis_id": analysis_id,
         "name": payload.name,
         "report_id": payload.report_id,
+        "portfolio_id": payload.portfolio_id,
+        "portfolio_snapshot": portfolio_snapshot,
         "status": "processing",
         "created_at": firestore.SERVER_TIMESTAMP,
         "total_keywords_analyzed": 0,
         "error_message": None,
     })
     background_tasks.add_task(
-        _run_analysis_background, analysis_id, payload.report_id, payload.filter_ids
+        _run_analysis_background, analysis_id, payload.report_id, payload.portfolio_id, payload.filter_ids
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
+    snapshot_data = doc.get("portfolio_snapshot")
+    snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+    
     return GapAnalysis(
         analysis_id=doc["analysis_id"], name=doc["name"],
-        report_id=doc["report_id"], status=doc["status"],
+        report_id=doc["report_id"],
+        portfolio_snapshot=snapshot,
+        status=doc["status"],
         created_at=ts_to_str(doc["created_at"]),
         total_keywords_analyzed=doc["total_keywords_analyzed"],
     )
@@ -270,9 +300,15 @@ def list_gap_analyses(report_id: Optional[str] = None, status: Optional[str] = N
             else:
                 if doc_status == "archived":
                     continue
+            
+            snapshot_data = d.get("portfolio_snapshot")
+            snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+            
             analyses.append(GapAnalysis(
                 analysis_id=d["analysis_id"], name=d.get("name", ""),
-                report_id=d["report_id"], status=doc_status,
+                report_id=d["report_id"],
+                portfolio_snapshot=snapshot,
+                status=doc_status,
                 created_at=ts_to_str(d["created_at"]),
                 total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
                 error_message=d.get("error_message"),
@@ -290,9 +326,15 @@ def get_gap_analysis(analysis_id: str):
     if not doc.exists:
         raise HTTPException(404, f"Analysis {analysis_id} not found")
     d = doc.to_dict()
+    
+    snapshot_data = d.get("portfolio_snapshot")
+    snapshot = PortfolioSnapshot(**snapshot_data) if snapshot_data else None
+    
     return GapAnalysis(
         analysis_id=d["analysis_id"], name=d.get("name", ""),
-        report_id=d["report_id"], status=d["status"],
+        report_id=d["report_id"],
+        portfolio_snapshot=snapshot,
+        status=d["status"],
         created_at=ts_to_str(d["created_at"]),
         total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
         error_message=d.get("error_message"),

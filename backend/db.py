@@ -18,6 +18,8 @@ T_RUNS = config["bigquery"]["tables"]["runs"]
 T_RESULTS = config["bigquery"]["tables"]["results"]
 T_PORTFOLIO_ITEMS = config["bigquery"]["tables"]["portfolio_items"]
 T_PORTFOLIO_EMBEDDINGS = config["bigquery"]["tables"]["portfolio_embeddings"]
+T_PORTFOLIO_ITEMS_V2 = config["bigquery"]["tables"]["portfolio_items_v2"]
+T_PORTFOLIO_EMBEDDINGS_V2 = config["bigquery"]["tables"]["portfolio_embeddings_v2"]
 T_GAP_ANALYSIS = config["bigquery"]["tables"]["gap_analysis_results"]
 T_FILTER_RESULTS = config["bigquery"]["tables"]["filter_results"]
 

@@ -20,6 +20,8 @@ bigquery:
     results: "keyword_results"
     portfolio_items: "portfolio_items"
     portfolio_embeddings: "portfolio_embeddings"
+    portfolio_items_v2: "portfolio_items_v2"
+    portfolio_embeddings_v2: "portfolio_embeddings_v2"
     gap_analysis_results: "gap_analysis_results"
     filter_results: "filter_results"
   models:

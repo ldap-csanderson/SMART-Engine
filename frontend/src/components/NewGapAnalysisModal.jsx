@@ -3,8 +3,10 @@ import { useState, useEffect } from 'react'
 export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
   const [name, setName] = useState('')
   const [reportId, setReportId] = useState('')
+  const [portfolioId, setPortfolioId] = useState('')
   const [selectedFilterIds, setSelectedFilterIds] = useState([])
   const [reports, setReports] = useState([])
+  const [portfolios, setPortfolios] = useState([])
   const [filters, setFilters] = useState([])
   const [error, setError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
@@ -18,10 +20,14 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
           `Gap Analysis ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
         )
       }
-      // Fetch completed reports and available filters
+      // Fetch completed reports, portfolios, and available filters
       fetch('/api/keyword-reports')
         .then((r) => r.json())
         .then((d) => setReports((d.reports || []).filter((r) => r.status === 'completed')))
+        .catch(console.error)
+      fetch('/api/portfolios')
+        .then((r) => r.json())
+        .then((d) => setPortfolios(d.portfolios || []))
         .catch(console.error)
       fetch('/api/filters')
         .then((r) => r.json())
@@ -42,12 +48,17 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
       setError('Please select a keyword report')
       return
     }
+    if (!portfolioId) {
+      setError('Please select a portfolio')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
       const body = {
         name: name.trim() || placeholder,
         report_id: reportId,
+        portfolio_id: portfolioId,
       }
       if (selectedFilterIds.length > 0) {
         body.filter_ids = selectedFilterIds
@@ -63,6 +74,7 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
       }
       setName('')
       setReportId('')
+      setPortfolioId('')
       setSelectedFilterIds([])
       setError(null)
       setPlaceholder('')
@@ -79,6 +91,7 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
     if (submitting) return
     setName('')
     setReportId('')
+    setPortfolioId('')
     setSelectedFilterIds([])
     setError(null)
     setPlaceholder('')
@@ -143,6 +156,31 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
               )}
             </div>
 
+            {/* Portfolio */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Portfolio <span className="text-red-500">*</span>
+              </label>
+              {portfolios.length === 0 ? (
+                <p className="text-sm text-gray-500 italic">No portfolios available. Create a portfolio first.</p>
+              ) : (
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                  value={portfolioId}
+                  onChange={(e) => setPortfolioId(e.target.value)}
+                  disabled={submitting}
+                  required
+                >
+                  <option value="">Select a portfolio…</option>
+                  {portfolios.map((p) => (
+                    <option key={p.portfolio_id} value={p.portfolio_id}>
+                      {p.name} — {p.total_items} {p.total_items === 1 ? 'item' : 'items'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
             {/* Filters (optional multiselect) */}
             {filters.length > 0 && (
               <div className="mb-5">
@@ -189,7 +227,7 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
               </button>
               <button
                 type="submit"
-                disabled={submitting || !reportId}
+                disabled={submitting || !reportId || !portfolioId}
                 className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting ? (

@@ -3,7 +3,9 @@ import hashlib
 from db import (
     bq_client, PROJECT_ID, DATASET_ID, CONNECTION_ID,
     MODEL_GEMINI, MODEL_EMBEDDINGS,
-    T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, T_GAP_ANALYSIS, T_FILTER_RESULTS,
+    T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, 
+    T_PORTFOLIO_ITEMS_V2, T_PORTFOLIO_EMBEDDINGS_V2,
+    T_GAP_ANALYSIS, T_FILTER_RESULTS,
 )
 
 # ---------------------------------------------------------------------------
@@ -94,11 +96,12 @@ _EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 'SEMANTIC_SIMILARITY' AS task_t
 def run_gap_analysis_pipeline(
     analysis_id: str,
     report_id: str,
+    portfolio_id: str,
     keyword_prompt: str,
     portfolio_prompt: str,
 ) -> int:
     """
-    Run the full 5-step gap analysis pipeline.
+    Run the full 5-step gap analysis pipeline using v2 tables with portfolio_id.
     Returns the number of result rows inserted.
     Raises on any BQ error.
     """
@@ -145,15 +148,18 @@ def run_gap_analysis_pipeline(
         )
     """, "Step 2: keyword embeddings")
 
-    # Step 3a: count uncached portfolio items
+    # Step 3a: count uncached portfolio items FOR THIS PORTFOLIO
     uncached = run_bq_scalar(f"""
         SELECT COUNT(DISTINCT pi.item_text)
-        FROM {_t(T_PORTFOLIO_ITEMS)} pi
-        LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS)} pe
-          ON pi.item_text = pe.item_text AND pe.prompt_hash = '{ph}'
-        WHERE pe.item_text IS NULL
+        FROM {_t(T_PORTFOLIO_ITEMS_V2)} pi
+        LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
+          ON pi.item_text = pe.item_text 
+          AND pi.portfolio_id = pe.portfolio_id
+          AND pe.prompt_hash = '{ph}'
+        WHERE pi.portfolio_id = '{portfolio_id}'
+          AND pe.item_text IS NULL
     """)
-    print(f"📊 Uncached portfolio items: {uncached}")
+    print(f"📊 Uncached portfolio items (portfolio_id={portfolio_id}): {uncached}")
 
     if uncached > 0:
         # Step 3b: portfolio intent strings for uncached items
@@ -165,10 +171,13 @@ def run_gap_analysis_pipeline(
                 (
                   SELECT DISTINCT pi.item_text,
                     CONCAT('{pp}', '\\n\\nTopic: ', pi.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                  FROM {_t(T_PORTFOLIO_ITEMS)} pi
-                  LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS)} pe
-                    ON pi.item_text = pe.item_text AND pe.prompt_hash = '{ph}'
-                  WHERE pe.item_text IS NULL
+                  FROM {_t(T_PORTFOLIO_ITEMS_V2)} pi
+                  LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
+                    ON pi.item_text = pe.item_text 
+                    AND pi.portfolio_id = pe.portfolio_id
+                    AND pe.prompt_hash = '{ph}'
+                  WHERE pi.portfolio_id = '{portfolio_id}'
+                    AND pe.item_text IS NULL
                 ),
                 {_LLM_OPTS}
               )
@@ -176,11 +185,12 @@ def run_gap_analysis_pipeline(
             SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
         """, "Step 3b: portfolio intents for uncached items")
 
-        # Step 3c: insert new embeddings into cache
+        # Step 3c: insert new embeddings into v2 cache
         run_bq(f"""
-            INSERT INTO {_t(T_PORTFOLIO_EMBEDDINGS)}
-              (item_text, intent_string, embedding, prompt_hash, embedded_at)
-            SELECT item_text, intent_string, ml_generate_embedding_result AS embedding,
+            INSERT INTO {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
+              (portfolio_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
+            SELECT '{portfolio_id}' AS portfolio_id,
+                   item_text, intent_string, ml_generate_embedding_result AS embedding,
                    '{ph}' AS prompt_hash, CURRENT_TIMESTAMP() AS embedded_at
             FROM ML.GENERATE_EMBEDDING(
               MODEL {_m(MODEL_EMBEDDINGS)},
@@ -191,7 +201,7 @@ def run_gap_analysis_pipeline(
               ),
               {_EMB_OPTS}
             )
-        """, "Step 3c: populate portfolio embeddings cache")
+        """, "Step 3c: populate portfolio embeddings cache (v2)")
 
     # Step 4: compute distances and insert results
     run_bq(f"""
@@ -207,8 +217,8 @@ def run_gap_analysis_pipeline(
             pe.intent_string AS portfolio_intent,
             ML.DISTANCE(ke.embedding, pe.embedding, 'COSINE') AS semantic_distance
           FROM {_t(tmp_kw_emb)} ke
-          CROSS JOIN {_t(T_PORTFOLIO_EMBEDDINGS)} pe
-          WHERE pe.prompt_hash = '{ph}'
+          CROSS JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
+          WHERE pe.portfolio_id = '{portfolio_id}' AND pe.prompt_hash = '{ph}'
         ),
         closest AS (
           SELECT *,
