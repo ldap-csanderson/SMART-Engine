@@ -65,6 +65,8 @@ export default function GapAnalysisDetailPage() {
   const [portfolioSnapshot, setPortfolioSnapshot] = useState(null)
   const loadedFilterResultsRef = useRef(new Set())
   const [expandedRows, setExpandedRows] = useState(new Set())
+  const [copyFormat, setCopyFormat] = useState('md')
+  const [showCopied, setShowCopied] = useState(false)
 
   // Poll executions every 2s while any are processing; load results as they complete
   useEffect(() => {
@@ -260,6 +262,47 @@ export default function GapAnalysisDetailPage() {
         next.add(idx)
       }
       return next
+    })
+  }
+
+  const handleCopyToClipboard = () => {
+    let text = ''
+    if (copyFormat === 'md') {
+      text = '| Keyword | Searches/mo | Distance | Closest Portfolio Item |\n'
+      text += '|---------|-------------|----------|------------------------|\n'
+      displayedResults.forEach((r) => {
+        const kw = r.keyword_text || '—'
+        const searches = r.avg_monthly_searches?.toLocaleString() || '—'
+        const dist = r.semantic_distance?.toFixed(3) || '—'
+        const item = r.portfolio_matches?.[0]?.item || '—'
+        text += `| ${kw} | ${searches} | ${dist} | ${item} |\n`
+      })
+    } else if (copyFormat === 'csv') {
+      text = 'keyword,searches_per_month,distance,closest_portfolio_item\n'
+      displayedResults.forEach((r) => {
+        const kw = (r.keyword_text || '').replace(/"/g, '""')
+        const searches = r.avg_monthly_searches || ''
+        const dist = r.semantic_distance?.toFixed(3) || ''
+        const item = (r.portfolio_matches?.[0]?.item || '').replace(/"/g, '""')
+        text += `"${kw}",${searches},${dist},"${item}"\n`
+      })
+    } else if (copyFormat === 'json') {
+      const data = displayedResults.map((r) => ({
+        keyword: r.keyword_text,
+        searches_per_month: r.avg_monthly_searches,
+        distance: r.semantic_distance,
+        closest_portfolio_item: r.portfolio_matches?.[0]?.item || null,
+        portfolio_matches: r.portfolio_matches || []
+      }))
+      text = JSON.stringify(data, null, 2)
+    }
+
+    navigator.clipboard.writeText(text).then(() => {
+      setShowCopied(true)
+      setTimeout(() => setShowCopied(false), 2000)
+    }).catch((err) => {
+      console.error('Copy failed:', err)
+      alert('Failed to copy to clipboard')
     })
   }
 
@@ -459,14 +502,36 @@ export default function GapAnalysisDetailPage() {
               <p className="text-xs text-gray-400 mt-0.5">Distance ≥ this → highlighted</p>
             </div>
 
-            {/* Counts */}
-            <div className="self-end pb-0.5 text-right">
+            {/* Copy + Counts */}
+            <div className="self-end pb-0.5 text-right relative">
+              <div className="flex items-center justify-end gap-2 mb-2">
+                <span className="text-xs text-gray-500">Copy:</span>
+                <div className="flex rounded-md overflow-hidden border border-gray-300">
+                  {['md', 'csv', 'json'].map((fmt) => (
+                    <button
+                      key={fmt}
+                      onClick={() => {
+                        setCopyFormat(fmt)
+                        handleCopyToClipboard()
+                      }}
+                      className="px-2 py-0.5 text-xs font-medium bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                    >
+                      {fmt.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <p className="text-sm text-gray-500">
                 <span className="font-semibold text-gray-900">{displayedResults.length.toLocaleString()}</span> rows shown
                 {displayedResults.length !== results.length && (
                   <span className="text-gray-400"> (of {results.length.toLocaleString()} loaded)</span>
                 )}
               </p>
+              {showCopied && (
+                <div className="absolute top-0 right-0 -mt-6 bg-green-600 text-white text-xs px-2 py-1 rounded shadow">
+                  Copied!
+                </div>
+              )}
             </div>
           </div>
         </div>
