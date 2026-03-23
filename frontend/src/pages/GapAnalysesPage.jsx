@@ -17,7 +17,6 @@ export default function GapAnalysesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState({})
   const [reportsMap, setReportsMap] = useState({}) // report_id → report metadata
-  const [portfolioCount, setPortfolioCount] = useState(0)
   const [executionsMap, setExecutionsMap] = useState({}) // analysis_id → executions[]
   const showArchivedRef = useRef(showArchived)
 
@@ -70,23 +69,16 @@ export default function GapAnalysesPage() {
     fetchExecutions()
   }, [analyses])
 
-  // Fetch reports map and portfolio count on mount (once)
+  // Fetch reports map on mount (once)
   useEffect(() => {
     const fetchMetadata = async () => {
       try {
-        const [reportsRes, portfolioRes] = await Promise.all([
-          fetch('/api/keyword-reports'),
-          fetch('/api/portfolio/meta'),
-        ])
+        const reportsRes = await fetch('/api/keyword-reports')
         if (reportsRes.ok) {
           const data = await reportsRes.json()
           const map = {}
           ;(data.reports || []).forEach(r => { map[r.report_id] = r })
           setReportsMap(map)
-        }
-        if (portfolioRes.ok) {
-          const data = await portfolioRes.json()
-          setPortfolioCount(data.total_items || 0)
         }
       } catch (err) {
         console.error('Failed to fetch metadata:', err)
@@ -208,7 +200,7 @@ export default function GapAnalysesPage() {
                       <span>·</span>
                       <span>{a.total_keywords_analyzed.toLocaleString()} keywords</span>
                       <span>·</span>
-                      <span>{portfolioCount} portfolio items</span>
+                      <span>{(a.portfolio_snapshot?.items?.length ?? 0).toLocaleString()} portfolio items</span>
                       {executionsMap[a.analysis_id]?.length > 0 && (
                         <>
                           <span>·</span>
