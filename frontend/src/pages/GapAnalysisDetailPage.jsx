@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import RunFiltersModal from '../components/RunFiltersModal'
 
 // Three-state toggle: any → true → false → any
-function FilterModeToggle({ label, mode, onChange }) {
+function FilterModeToggle({ label, mode, onChange, onDelete }) {
   const options = ['any', 'true', 'false']
   const colors = {
     any: 'bg-gray-100 text-gray-600',
@@ -28,6 +28,15 @@ function FilterModeToggle({ label, mode, onChange }) {
           </button>
         ))}
       </div>
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          className="ml-1 text-red-600 hover:text-red-700 text-sm font-bold"
+          title="Delete this filter"
+        >
+          ✕
+        </button>
+      )}
     </div>
   )
 }
@@ -203,6 +212,32 @@ export default function GapAnalysisDetailPage() {
     setFilterModes((prev) => ({ ...prev, [execId]: mode }))
   }
 
+  const handleDeleteFilter = async (execId, filterName) => {
+    if (!window.confirm(`Delete filter "${filterName}"? This cannot be undone.`)) return
+    try {
+      const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions/${execId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('Failed to delete filter')
+      
+      // Remove from local state
+      setExecutions((prev) => prev.filter((e) => e.execution_id !== execId))
+      setFilterModes((prev) => {
+        const next = { ...prev }
+        delete next[execId]
+        return next
+      })
+      setFilterResultsMap((prev) => {
+        const next = { ...prev }
+        delete next[execId]
+        return next
+      })
+      loadedFilterResultsRef.current.delete(execId)
+    } catch (err) {
+      alert(`Error deleting filter: ${err.message}`)
+    }
+  }
+
   const handleMinSearchesBlur = () => {
     const v = parseInt(minSearchesInput, 10)
     if (!isNaN(v) && v >= 0) setMinSearches(v)
@@ -339,6 +374,7 @@ export default function GapAnalysisDetailPage() {
                       label={e.filter_snapshot.name}
                       mode={filterModes[e.execution_id] || 'any'}
                       onChange={(mode) => handleFilterModeChange(e.execution_id, mode)}
+                      onDelete={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
                     />
                   ))}
                 </div>
