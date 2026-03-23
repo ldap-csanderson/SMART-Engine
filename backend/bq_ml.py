@@ -218,6 +218,8 @@ def run_gap_analysis_pipeline(
             ML.DISTANCE(ke.embedding, pe.embedding, 'COSINE') AS semantic_distance
           FROM {_t(tmp_kw_emb)} ke
           CROSS JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
+          INNER JOIN {_t(T_PORTFOLIO_ITEMS_V2)} pi
+            ON pe.item_text = pi.item_text AND pe.portfolio_id = pi.portfolio_id
           WHERE pe.portfolio_id = '{portfolio_id}' AND pe.prompt_hash = '{ph}'
         ),
         closest AS (
