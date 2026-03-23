@@ -8,9 +8,10 @@ export default function PortfoliosPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [actionLoading, setActionLoading] = useState({})
 
-  const fetchPortfolios = async () => {
-    setLoading(true)
+  const fetchPortfolios = async (isInitial = false) => {
+    if (isInitial) setLoading(true)
     setError(null)
     try {
       const res = await fetch('/api/portfolios')
@@ -20,13 +21,28 @@ export default function PortfoliosPage() {
     } catch (err) {
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (isInitial) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchPortfolios()
+    fetchPortfolios(true)
   }, [])
+
+  const handleDelete = async (portfolioId, portfolioName) => {
+    if (!window.confirm(`Delete portfolio "${portfolioName}"? This cannot be undone.`)) return
+
+    setActionLoading((prev) => ({ ...prev, [portfolioId]: true }))
+    try {
+      const response = await fetch(`/api/portfolios/${portfolioId}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Failed to delete')
+      setPortfolios((prev) => prev.filter((p) => p.portfolio_id !== portfolioId))
+    } catch (err) {
+      alert(`Error: ${err.message}`)
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [portfolioId]: false }))
+    }
+  }
 
   const handlePortfolioCreated = () => {
     fetchPortfolios()
@@ -35,9 +51,9 @@ export default function PortfoliosPage() {
   const formatDate = (dateStr) => {
     if (!dateStr) return ''
     const date = new Date(dateStr)
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
@@ -45,117 +61,96 @@ export default function PortfoliosPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Portfolios</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage your content portfolios for gap analysis
-          </p>
-        </div>
-        <button
-          onClick={() => setShowNewModal(true)}
-          className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-        >
-          <svg className="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          New Portfolio
-        </button>
-      </div>
-
-      {/* Error State */}
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
-          <p className="text-red-800">{error}</p>
-        </div>
-      )}
-
-      {/* Loading State */}
-      {loading && (
-        <div className="text-center py-12">
-          <svg className="animate-spin h-8 w-8 mx-auto text-blue-600" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <p className="mt-2 text-gray-500">Loading portfolios...</p>
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!loading && portfolios.length === 0 && (
-        <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No portfolios</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by creating a new portfolio.</p>
-          <div className="mt-6">
-            <button
-              onClick={() => setShowNewModal(true)}
-              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
-            >
-              <svg className="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Portfolio
-            </button>
+    <div className="bg-gray-50">
+      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Portfolios</h1>
+            <p className="mt-2 text-gray-600">Manage your content portfolios for gap analysis</p>
           </div>
+          <button
+            onClick={() => setShowNewModal(true)}
+            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
+          >
+            + New Portfolio
+          </button>
         </div>
-      )}
 
-      {/* Portfolio List */}
-      {!loading && portfolios.length > 0 && (
-        <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ul className="divide-y divide-gray-200">
+        {/* Error State */}
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
+            <p className="text-red-800">{error}</p>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="mt-3 text-gray-500">Loading portfolios...</p>
+          </div>
+        ) : portfolios.length === 0 ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <div className="flex flex-col items-center">
+              <button
+                onClick={() => setShowNewModal(true)}
+                className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm mb-4"
+              >
+                + New Portfolio
+              </button>
+              <p className="text-gray-500">No portfolios yet — create your first portfolio</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
             {portfolios.map((portfolio) => (
-              <li key={portfolio.portfolio_id}>
-                <button
-                  onClick={() => navigate(`/portfolios/${portfolio.portfolio_id}`)}
-                  className="w-full text-left block hover:bg-gray-50 focus:outline-none focus:bg-gray-50 transition duration-150 ease-in-out"
-                >
-                  <div className="px-4 py-4 sm:px-6">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-lg font-semibold text-blue-600 truncate">
-                          {portfolio.name}
-                        </p>
-                        <div className="mt-2 flex items-center text-sm text-gray-500">
-                          <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span className="font-medium">{portfolio.total_items}</span>
-                          <span className="ml-1">
-                            {portfolio.total_items === 1 ? 'item' : 'items'}
-                          </span>
-                          <span className="mx-2">•</span>
-                          <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <span>Updated {formatDate(portfolio.updated_at)}</span>
-                        </div>
-                      </div>
-                      <div>
-                        <svg className="h-5 w-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                        </svg>
-                      </div>
+              <div
+                key={portfolio.portfolio_id}
+                className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-gray-900">{portfolio.name}</h3>
+                    <div className="mt-1 flex items-center gap-3 text-sm text-gray-500">
+                      <span>
+                        <span className="font-medium text-gray-700">{portfolio.total_items}</span>
+                        {' '}{portfolio.total_items === 1 ? 'item' : 'items'}
+                      </span>
+                      <span>•</span>
+                      <span>Updated {formatDate(portfolio.updated_at)}</span>
                     </div>
                   </div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
-      {/* New Portfolio Modal */}
-      <NewPortfolioModal
-        isOpen={showNewModal}
-        onClose={() => setShowNewModal(false)}
-        onCreated={handlePortfolioCreated}
-      />
+                  <div className="flex gap-2 ml-4 flex-shrink-0">
+                    <button
+                      onClick={() => navigate(`/portfolios/${portfolio.portfolio_id}`)}
+                      className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      onClick={() => handleDelete(portfolio.portfolio_id, portfolio.name)}
+                      disabled={actionLoading[portfolio.portfolio_id]}
+                      className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {actionLoading[portfolio.portfolio_id] ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* New Portfolio Modal */}
+        <NewPortfolioModal
+          isOpen={showNewModal}
+          onClose={() => setShowNewModal(false)}
+          onCreated={handlePortfolioCreated}
+        />
+      </div>
     </div>
   )
 }
