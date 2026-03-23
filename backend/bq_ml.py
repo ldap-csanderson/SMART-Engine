@@ -241,12 +241,12 @@ def run_gap_analysis_pipeline(
           WHERE run_id = '{report_id}'
           GROUP BY keyword_text
         ) kw ON c.keyword_text = kw.keyword_text
-        WHERE c.rn = 1
+        WHERE c.rn <= 3
     """, "Step 4: insert gap analysis results")
 
-    # Count inserted rows
+    # Count distinct keywords analyzed (up to 3 rows per keyword now)
     count = run_bq_scalar(f"""
-        SELECT COUNT(*) FROM {_t(T_GAP_ANALYSIS)} WHERE analysis_id = '{analysis_id}'
+        SELECT COUNT(DISTINCT keyword_text) FROM {_t(T_GAP_ANALYSIS)} WHERE analysis_id = '{analysis_id}'
     """)
 
     # Step 5: cleanup temp tables (best effort — leave on failure for debugging)

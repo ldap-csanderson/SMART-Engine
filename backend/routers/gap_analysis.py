@@ -85,13 +85,18 @@ class GapAnalysisListResponse(BaseModel):
     total_count: int
 
 
+class PortfolioMatch(BaseModel):
+    item: Optional[str] = None
+    intent: Optional[str] = None
+    distance: Optional[float] = None
+
+
 class GapAnalysisResult(BaseModel):
     keyword_text: str
-    keyword_intent: Optional[str]
-    closest_portfolio_item: Optional[str]
-    closest_portfolio_intent: Optional[str]
-    semantic_distance: Optional[float]
-    avg_monthly_searches: Optional[int]
+    keyword_intent: Optional[str] = None
+    portfolio_matches: List[PortfolioMatch] = []
+    semantic_distance: Optional[float] = None  # min distance (closest match)
+    avg_monthly_searches: Optional[int] = None
 
 
 class GapAnalysisResultsResponse(BaseModel):
@@ -430,12 +435,25 @@ def get_gap_analysis_results(
         base_where = f"WHERE g.analysis_id = '{analysis_id}'"
 
         rows = bq_client.query(f"""
-            SELECT g.keyword_text, g.keyword_intent, g.closest_portfolio_item,
-                   g.closest_portfolio_intent, g.semantic_distance, g.avg_monthly_searches
+            SELECT
+              g.keyword_text,
+              MIN(g.keyword_intent) AS keyword_intent,
+              ARRAY_AGG(
+                STRUCT(
+                  g.closest_portfolio_item AS item,
+                  g.closest_portfolio_intent AS intent,
+                  g.semantic_distance AS distance
+                )
+                ORDER BY g.semantic_distance ASC
+                LIMIT 3
+              ) AS portfolio_matches,
+              MIN(g.semantic_distance) AS semantic_distance,
+              MAX(g.avg_monthly_searches) AS avg_monthly_searches
             FROM {table} g
             {base_where}
             {true_clause}
             {false_clause}
+            GROUP BY g.keyword_text
             ORDER BY {order_by} {order_dir.upper()}
             LIMIT {limit} OFFSET {offset}
         """).result()
@@ -443,14 +461,16 @@ def get_gap_analysis_results(
         results = [GapAnalysisResult(
             keyword_text=row.keyword_text,
             keyword_intent=row.keyword_intent,
-            closest_portfolio_item=row.closest_portfolio_item,
-            closest_portfolio_intent=row.closest_portfolio_intent,
+            portfolio_matches=[
+                PortfolioMatch(item=m["item"], intent=m["intent"], distance=m["distance"])
+                for m in (row.portfolio_matches or [])
+            ],
             semantic_distance=row.semantic_distance,
             avg_monthly_searches=row.avg_monthly_searches,
         ) for row in rows]
 
         total_rows = bq_client.query(f"""
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT g.keyword_text)
             FROM {table} g
             {base_where}
             {true_clause}
