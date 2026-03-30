@@ -152,6 +152,8 @@ def _process_report_background(report_id: str, urls: List[str]):
             keywords = _fetch_keyword_ideas(ga_client, CUSTOMER_ID, url)
             _insert_keywords_to_bq(report_id, url, keywords)
             total += len(keywords)
+            if i < len(urls) - 1:
+                time.sleep(1)
         db.collection("keyword_reports").document(report_id).update({
             "status": "completed", "total_keywords_found": total,
         })
