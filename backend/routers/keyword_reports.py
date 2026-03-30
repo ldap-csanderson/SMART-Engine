@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from db import (
     ga_client, ga_auth_manager, bq_client, db, ts_to_str,
     CUSTOMER_ID, MAX_RETRIES, RETRY_DELAY,
-    PROJECT_ID, DATASET_ID, T_RESULTS, config,
+    PROJECT_ID, DATASET_ID, T_RESULTS,
 )
 
 router = APIRouter(prefix="/keyword-reports", tags=["keyword-reports"])
@@ -178,8 +178,6 @@ def create_keyword_report(request: URLRequest, background_tasks: BackgroundTasks
         raise HTTPException(503, "Google Ads client not initialized")
     if not request.urls:
         raise HTTPException(400, "No URLs provided")
-    if len(request.urls) > config["api"]["max_urls_per_request"]:
-        raise HTTPException(400, f"Maximum {config['api']['max_urls_per_request']} URLs per request")
 
     report_id = str(uuid.uuid4())
     name = request.name or f"Report {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"

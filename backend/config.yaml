@@ -36,6 +36,5 @@ google_ads:
 
 # API Settings
 api:
-  max_urls_per_request: 50
   max_retries: 3
   retry_delay_seconds: 5
