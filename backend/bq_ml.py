@@ -72,6 +72,26 @@ def create_models_if_not_exist():
         print(f"⚠️ Model creation encountered an error: {e}")
 
 
+def create_vector_index_if_not_exists():
+    """
+    Create an IVF vector index on portfolio_embeddings_v2 for VECTOR_SEARCH.
+    Requires >= 5000 rows to build; silently skips if the table is too small.
+    The index builds asynchronously in the background — VECTOR_SEARCH works
+    (via brute-force fallback) even before the index is ready.
+    """
+    if bq_client is None:
+        return
+    try:
+        run_bq(
+            f"""CREATE VECTOR INDEX IF NOT EXISTS idx_portfolio_embeddings_v2
+                ON {_t(T_PORTFOLIO_EMBEDDINGS_V2)}(embedding)
+                OPTIONS(distance_type = 'COSINE', index_type = 'IVF')""",
+            f"CREATE VECTOR INDEX IF NOT EXISTS idx_portfolio_embeddings_v2",
+        )
+    except Exception as e:
+        print(f"⚠️ Vector index creation skipped (table may be too small): {e}")
+
+
 # ---------------------------------------------------------------------------
 # Gap analysis pipeline
 # ---------------------------------------------------------------------------
@@ -203,48 +223,54 @@ def run_gap_analysis_pipeline(
             )
         """, "Step 3c: populate portfolio embeddings cache (v2)")
 
-    # Step 4: compute distances and insert results
+    # Step 4: compute top-3 distances via VECTOR_SEARCH and insert results.
+    # VECTOR_SEARCH uses an ANN index (IVF) on portfolio_embeddings_v2 to avoid
+    # the brute-force CROSS JOIN that exceeds BQ's on-demand CPU limit for large
+    # analyses. Falls back to brute-force automatically if the index is not ready
+    # or the filtered subset is too small to use the index.
     run_bq(f"""
         INSERT INTO {_t(T_GAP_ANALYSIS)}
           (analysis_id, created_at, keyword_text, keyword_intent,
            closest_portfolio_item, closest_portfolio_intent,
            semantic_distance, avg_monthly_searches)
-        WITH distances AS (
+        WITH vs AS (
           SELECT
-            ke.keyword_text,
-            ke.intent_string AS keyword_intent,
-            pe.item_text AS portfolio_item,
-            pe.intent_string AS portfolio_intent,
-            ML.DISTANCE(ke.embedding, pe.embedding, 'COSINE') AS semantic_distance
-          FROM {_t(tmp_kw_emb)} ke
-          CROSS JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
+            query.keyword_text,
+            query.intent_string AS keyword_intent,
+            base.item_text AS portfolio_item,
+            base.intent_string AS portfolio_intent,
+            distance AS semantic_distance
+          FROM VECTOR_SEARCH(
+            (
+              SELECT *
+              FROM {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
+              WHERE portfolio_id = '{portfolio_id}' AND prompt_hash = '{ph}'
+            ),
+            'embedding',
+            (SELECT keyword_text, intent_string, embedding FROM {_t(tmp_kw_emb)}),
+            top_k => 3,
+            distance_type => 'COSINE'
+          )
           INNER JOIN {_t(T_PORTFOLIO_ITEMS_V2)} pi
-            ON pe.item_text = pi.item_text AND pe.portfolio_id = pi.portfolio_id
-          WHERE pe.portfolio_id = '{portfolio_id}' AND pe.prompt_hash = '{ph}'
-        ),
-        closest AS (
-          SELECT *,
-            ROW_NUMBER() OVER (PARTITION BY keyword_text ORDER BY semantic_distance ASC) AS rn
-          FROM distances
+            ON base.item_text = pi.item_text AND base.portfolio_id = pi.portfolio_id
         )
         SELECT
           '{analysis_id}' AS analysis_id,
           CURRENT_TIMESTAMP() AS created_at,
-          c.keyword_text,
-          c.keyword_intent,
-          c.portfolio_item AS closest_portfolio_item,
-          c.portfolio_intent AS closest_portfolio_intent,
-          c.semantic_distance,
+          vs.keyword_text,
+          vs.keyword_intent,
+          vs.portfolio_item AS closest_portfolio_item,
+          vs.portfolio_intent AS closest_portfolio_intent,
+          vs.semantic_distance,
           kw.avg_monthly_searches
-        FROM closest c
+        FROM vs
         LEFT JOIN (
           SELECT keyword_text, MAX(avg_monthly_searches) AS avg_monthly_searches
           FROM {_t(T_RESULTS)}
           WHERE run_id = '{report_id}'
           GROUP BY keyword_text
-        ) kw ON c.keyword_text = kw.keyword_text
-        WHERE c.rn <= 3
-    """, "Step 4: insert gap analysis results")
+        ) kw ON vs.keyword_text = kw.keyword_text
+    """, "Step 4: insert gap analysis results (VECTOR_SEARCH)")
 
     # Count distinct keywords analyzed (up to 3 rows per keyword now)
     count = run_bq_scalar(f"""

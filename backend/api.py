@@ -7,16 +7,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from db import ga_client, bq_client, db, config
-from bq_ml import create_models_if_not_exist
+from bq_ml import create_models_if_not_exist, create_vector_index_if_not_exists
 from routers.settings import _ensure_defaults
 from routers import keyword_reports, filters, portfolio, gap_analysis, settings, filter_executions
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run BQ model creation in a background thread so startup doesn't block
+    # Run BQ startup tasks in background threads so startup doesn't block
     import threading
     threading.Thread(target=create_models_if_not_exist, daemon=True).start()
+    threading.Thread(target=create_vector_index_if_not_exists, daemon=True).start()
     _ensure_defaults()
     yield
 
