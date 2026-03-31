@@ -7,7 +7,7 @@ app:
 
 # Google Cloud Platform Settings
 gcp:
-  project_id: "gap-analysis-nlf"
+  project_id: "people-gandalf"
   region: "us-central1"
   credentials_path: "${GCP_SERVICE_ACCOUNT_KEY_PATH}"
 
