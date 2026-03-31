@@ -2,7 +2,7 @@
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from google.cloud import firestore
 from pydantic import BaseModel
 
@@ -87,7 +87,6 @@ def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot:
 def create_filter_executions(
     analysis_id: str,
     payload: FilterExecutionCreate,
-    background_tasks: BackgroundTasks,
 ):
     """
     Run one or more filters against a completed gap analysis.
@@ -156,7 +155,8 @@ def create_filter_executions(
                 f"A filter with name '{snap['name']}' has already been run on this analysis.",
             )
 
-    # Create executions and start background tasks
+    # Create executions and trigger jobs
+    from jobs import trigger_job, JOB_FILTER_EXECUTION
     created = []
     for fs in filter_snapshots:
         execution_id = str(uuid.uuid4())
@@ -170,9 +170,11 @@ def create_filter_executions(
             "total_evaluated": 0,
             "error_message": None,
         })
-        background_tasks.add_task(
-            _run_filter_background, execution_id, analysis_id, fs["snapshot"]
-        )
+        trigger_job(JOB_FILTER_EXECUTION, {
+            "execution_id": execution_id,
+            "analysis_id": analysis_id,
+            "filter_snapshot": fs["snapshot"],
+        })
         doc = db.collection("filter_executions").document(execution_id).get().to_dict()
         created.append(_doc_to_fe(doc))
 

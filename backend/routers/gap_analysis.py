@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from google.cloud import firestore
 from pydantic import BaseModel
 
@@ -247,7 +247,7 @@ def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=GapAnalysis)
-def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: BackgroundTasks):
+def create_gap_analysis(payload: GapAnalysisCreate):
     if not db:
         raise HTTPException(503, "Firestore not initialized")
     if not bq_client:
@@ -284,6 +284,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
             if not db.collection("filters").document(filter_id).get().exists:
                 raise HTTPException(404, f"Filter {filter_id} not found")
 
+    from jobs import trigger_job, JOB_GAP_ANALYSIS
     analysis_id = str(uuid.uuid4())
     db.collection("gap_analyses").document(analysis_id).set({
         "analysis_id": analysis_id,
@@ -297,11 +298,13 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "total_keywords_analyzed": 0,
         "error_message": None,
     })
-    background_tasks.add_task(
-        _run_analysis_background,
-        analysis_id, payload.report_id, payload.portfolio_id,
-        payload.filter_ids, payload.min_monthly_searches,
-    )
+    trigger_job(JOB_GAP_ANALYSIS, {
+        "analysis_id": analysis_id,
+        "report_id": payload.report_id,
+        "portfolio_id": payload.portfolio_id,
+        "filter_ids": payload.filter_ids,
+        "min_monthly_searches": payload.min_monthly_searches,
+    })
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
     snapshot_data = doc.get("portfolio_snapshot")

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from google.ads.googleads.errors import GoogleAdsException
 from google.cloud import firestore
 from pydantic import BaseModel
@@ -173,16 +173,17 @@ def _process_report_background(report_id: str, urls: List[str]):
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=KeywordReport)
-def create_keyword_report(request: URLRequest, background_tasks: BackgroundTasks):
+def create_keyword_report(request: URLRequest):
     if ga_client is None:
         raise HTTPException(503, "Google Ads client not initialized")
     if not request.urls:
         raise HTTPException(400, "No URLs provided")
 
+    from jobs import trigger_job, JOB_KEYWORD_REPORT
     report_id = str(uuid.uuid4())
     name = request.name or f"Report {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
     _insert_report_to_firestore(report_id, name, request.urls, 0, status="processing")
-    background_tasks.add_task(_process_report_background, report_id, request.urls)
+    trigger_job(JOB_KEYWORD_REPORT, {"report_id": report_id, "urls": request.urls})
 
     doc = db.collection("keyword_reports").document(report_id).get().to_dict()
     return KeywordReport(

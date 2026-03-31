@@ -78,6 +78,11 @@ resource "google_cloud_run_v2_service" "app" {
         name  = "GCP_PROJECT_ID"
         value = var.project_id
       }
+
+      env {
+        name  = "CLOUD_RUN_JOB_NAME"
+        value = "projects/${var.project_id}/locations/${var.region}/jobs/gap-analysis-worker"
+      }
       
       # Mount google-ads.yaml from Secret Manager
       volume_mounts {
