@@ -206,27 +206,17 @@ export default function ReportDetailPage() {
         {/* URLs Section — collapsible */}
         {(() => {
           const allUrls = reportMeta?.urls || []
+          const visibleUrls = urlsExpanded ? allUrls : allUrls.slice(0, URL_PREVIEW_COUNT)
+          const hiddenCount = allUrls.length - URL_PREVIEW_COUNT
           return (
             <div className="bg-white rounded-lg shadow p-6 mb-8">
-              <button
-                onClick={() => setUrlsExpanded((e) => !e)}
-                className="w-full flex items-center justify-between text-left group"
-              >
-                <h2 className="text-xl font-semibold text-gray-900">
-                  URLs Analyzed ({allUrls.length})
-                </h2>
-                <svg
-                  className={`w-5 h-5 text-gray-400 group-hover:text-gray-600 transition-transform duration-200 ${urlsExpanded ? 'rotate-180' : ''}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              {urlsExpanded && (
-                <div className="mt-4">
+              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+                URLs Analyzed ({allUrls.length})
+              </h2>
+              {allUrls.length > 0 && (
+                <div>
                   <ul className="space-y-2">
-                    {allUrls.map((url, index) => (
+                    {visibleUrls.map((url, index) => (
                       <li key={index} className="flex items-start">
                         <span className="text-blue-600 mr-2">•</span>
                         <a
@@ -240,13 +230,15 @@ export default function ReportDetailPage() {
                       </li>
                     ))}
                   </ul>
+                  {hiddenCount > 0 && (
+                    <button
+                      onClick={() => setUrlsExpanded((e) => !e)}
+                      className="mt-3 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      {urlsExpanded ? 'Show fewer' : `Show ${hiddenCount} more…`}
+                    </button>
+                  )}
                 </div>
-              )}
-
-              {!urlsExpanded && (
-                <p className="mt-2 text-sm text-gray-500">
-                  Click to expand and view all {allUrls.length} URLs
-                </p>
               )}
             </div>
           )

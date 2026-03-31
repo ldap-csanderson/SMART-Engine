@@ -526,7 +526,7 @@ export default function GapAnalysisDetailPage() {
             {/* Copy + row count */}
             <div className="self-end pb-0.5 text-right relative">
               <div className="flex items-center justify-end gap-2 mb-2">
-                <span className="text-xs text-gray-500">Copy page:</span>
+                <span className="text-xs text-gray-500">Copy Highlighted Rows:</span>
                 <div className="flex rounded-md overflow-hidden border border-gray-300">
                   {['md', 'csv', 'json'].map((fmt) => (
                     <button
