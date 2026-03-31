@@ -7,14 +7,21 @@ import { useState, useRef, useEffect } from 'react'
  * Editing state: replaces the h1 with an input of the same size,
  *   plus ✓ (save) and ✕ (cancel) buttons inline.
  *
+ * Optimistic update: when the user confirms, the new name is displayed
+ * immediately without waiting for the parent's API call to complete.
+ * If the parent's `value` prop reverts (i.e. the save failed), the
+ * displayed title reverts to match it automatically.
+ *
  * Props:
- *   value     — current title string
- *   onSave    — async fn(newName: string) → called when user confirms
+ *   value     — current title string (source of truth from parent)
+ *   onSave    — fn(newName: string) → called when user confirms
  *   saving    — optional bool; disables inputs while the request is in-flight
  */
 export default function EditableTitle({ value, onSave, saving = false }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
+  // Optimistic display value: set immediately on save, cleared once parent catches up
+  const [optimisticValue, setOptimisticValue] = useState(null)
   const inputRef = useRef(null)
 
   // Focus + select all when entering edit mode
@@ -25,30 +32,42 @@ export default function EditableTitle({ value, onSave, saving = false }) {
     }
   }, [editing])
 
-  // Keep draft in sync if the value changes externally (e.g. after a successful save)
+  // When parent's value catches up to our optimistic value, clear it.
+  // If parent reverts to something else (save failed), that also clears it
+  // and the h1 will show the parent's value.
+  useEffect(() => {
+    if (optimisticValue !== null) {
+      setOptimisticValue(null)
+    }
+  }, [value])
+
+  // Keep draft in sync with value when not editing (and no optimistic value pending)
   useEffect(() => {
     if (!editing) setDraft(value)
   }, [value, editing])
 
+  const displayedValue = optimisticValue ?? value
+
   const handleEdit = () => {
-    setDraft(value)
+    setDraft(displayedValue)
     setEditing(true)
   }
 
   const handleSave = () => {
     const trimmed = draft.trim()
-    if (!trimmed) return           // reject empty
-    if (trimmed === value) {       // no change — just close
+    if (!trimmed) return            // reject empty
+    if (trimmed === displayedValue) { // no change — just close
       setEditing(false)
       return
     }
-    onSave(trimmed)
+    setOptimisticValue(trimmed)   // show new name immediately
     setEditing(false)
+    onSave(trimmed)
   }
 
   const handleCancel = () => {
     setEditing(false)
-    setDraft(value)
+    setDraft(displayedValue)
   }
 
   const handleKeyDown = (e) => {
@@ -94,7 +113,7 @@ export default function EditableTitle({ value, onSave, saving = false }) {
 
   return (
     <div className="group flex items-center gap-2 min-w-0">
-      <h1 className="text-3xl font-bold text-gray-900 min-w-0 break-words">{value}</h1>
+      <h1 className="text-3xl font-bold text-gray-900 min-w-0 break-words">{displayedValue}</h1>
       <button
         onClick={handleEdit}
         title="Rename"
