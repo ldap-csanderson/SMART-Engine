@@ -1,5 +1,15 @@
 import { useState, useEffect } from 'react'
 
+// Estimate the cost of a single filter run over `uniqueKeywords` keywords.
+// Uses the filter prompt text length to approximate token count:
+//   input = ceil(text.length / 4) + 40 boilerplate tokens + ~5 keyword tokens
+//   output = ~10 tokens (short JSON result)
+function estimateFilterCost(filter, uniqueKeywords) {
+  const inputTokens = Math.ceil(filter.text.length / 4) + 45
+  const outputTokens = 10
+  return ((inputTokens * 0.25 + outputTokens * 1.50) / 1_000_000) * uniqueKeywords
+}
+
 export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
   const [name, setName] = useState('')
   const [reportId, setReportId] = useState('')
@@ -122,6 +132,14 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
     resetForm()
     onClose()
   }
+
+  // Compute filter costs when on the confirm step
+  const selectedFilters = filters.filter((f) => selectedFilterIds.includes(f.filter_id))
+  const filterCosts = estimate
+    ? selectedFilters.map((f) => estimateFilterCost(f, estimate.unique_keywords))
+    : []
+  const totalFilterCost = filterCosts.reduce((sum, c) => sum + c, 0)
+  const grandTotal = estimate ? estimate.estimated_cost_usd + totalFilterCost : 0
 
   if (!isOpen) return null
 
@@ -319,26 +337,30 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
                     <p className="pl-2 text-xs text-amber-600">LLM (intent generation): ~${estimate.estimated_llm_cost_usd.toFixed(2)}</p>
                     <p className="pl-2 text-xs text-amber-600">Embeddings (text-embedding-005): ~${estimate.estimated_embedding_cost_usd.toFixed(2)}</p>
                   </div>
-                  <span className={`font-bold text-amber-900 whitespace-nowrap ${selectedFilterIds.length > 0 ? 'text-base' : 'text-2xl'}`}>
+                  <span className={`font-bold text-amber-900 whitespace-nowrap ${selectedFilters.length > 0 ? 'text-base' : 'text-2xl'}`}>
                     ~${estimate.estimated_cost_usd.toFixed(2)}
                   </span>
                 </div>
 
-                {/* Filter cost + grand total */}
-                {selectedFilterIds.length > 0 && (
+                {/* Per-filter itemized cost rows */}
+                {selectedFilters.length > 0 && (
                   <>
-                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-amber-200">
-                      <span className="text-xs text-amber-600">
-                        + {selectedFilterIds.length} filter{selectedFilterIds.length > 1 ? 's' : ''} × ~${estimate.estimated_cost_usd.toFixed(2)}
-                      </span>
-                      <span className="text-base font-medium text-amber-900 whitespace-nowrap">
-                        ~${(estimate.estimated_cost_usd * selectedFilterIds.length).toFixed(2)}
-                      </span>
+                    <div className="mt-2 pt-2 border-t border-amber-200 space-y-1">
+                      {selectedFilters.map((f, i) => (
+                        <div key={f.filter_id} className="flex justify-between items-center">
+                          <span className="text-xs text-amber-600 truncate mr-2" title={f.name}>
+                            + {f.name}
+                          </span>
+                          <span className="text-sm font-medium text-amber-900 whitespace-nowrap">
+                            ~${filterCosts[i].toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex justify-between items-center mt-1 pt-1 border-t border-amber-300">
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-amber-300">
                       <span className="text-xs font-semibold text-amber-800">Total</span>
                       <span className="text-2xl font-bold text-amber-900 whitespace-nowrap">
-                        ~${(estimate.estimated_cost_usd * (1 + selectedFilterIds.length)).toFixed(2)}
+                        ~${grandTotal.toFixed(2)}
                       </span>
                     </div>
                   </>
