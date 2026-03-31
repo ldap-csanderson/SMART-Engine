@@ -393,12 +393,6 @@ export default function GapAnalysisDetailPage() {
             </span>
             <span>·</span>
             <span>{totalCount.toLocaleString()} keywords</span>
-            {portfolioSnapshot && (
-              <>
-                <span>·</span>
-                <span>{portfolioSnapshot.items?.length || 0} portfolio items ({portfolioSnapshot.name})</span>
-              </>
-            )}
             {analysis.min_monthly_searches != null && (
               <>
                 <span>·</span>
