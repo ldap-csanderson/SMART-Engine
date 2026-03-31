@@ -72,26 +72,6 @@ def create_models_if_not_exist():
         print(f"⚠️ Model creation encountered an error: {e}")
 
 
-def create_vector_index_if_not_exists():
-    """
-    Create an IVF vector index on portfolio_embeddings_v2 for VECTOR_SEARCH.
-    Requires >= 5000 rows to build; silently skips if the table is too small.
-    The index builds asynchronously in the background — VECTOR_SEARCH works
-    (via brute-force fallback) even before the index is ready.
-    """
-    if bq_client is None:
-        return
-    try:
-        run_bq(
-            f"""CREATE VECTOR INDEX IF NOT EXISTS idx_portfolio_embeddings_v2
-                ON {_t(T_PORTFOLIO_EMBEDDINGS_V2)}(embedding)
-                OPTIONS(distance_type = 'COSINE', index_type = 'IVF')""",
-            f"CREATE VECTOR INDEX IF NOT EXISTS idx_portfolio_embeddings_v2",
-        )
-    except Exception as e:
-        print(f"⚠️ Vector index creation skipped (table may be too small): {e}")
-
-
 # ---------------------------------------------------------------------------
 # Gap analysis pipeline
 # ---------------------------------------------------------------------------
