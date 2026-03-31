@@ -91,7 +91,7 @@ export default function KeywordTable({
                   onClick={() => col.sortable && handleColumnClick(col.key)}
                   className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider select-none ${
                     col.sortable ? 'cursor-pointer hover:bg-gray-100' : ''
-                  } ${orderBy === col.key ? 'text-blue-600 bg-blue-50' : ''}`}
+                  }`}
                 >
                   {col.label}
                   {col.sortable && <SortIcon active={orderBy === col.key} dir={orderDir} />}

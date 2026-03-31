@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import KeywordTable from '../components/KeywordTable'
 
 const DEFAULT_PAGE_SIZE = 100
+const URL_PREVIEW_COUNT = 10
 
 export default function ReportDetailPage() {
   const { reportId } = useParams()
@@ -18,6 +19,9 @@ export default function ReportDetailPage() {
   const [pageSize] = useState(DEFAULT_PAGE_SIZE)
   const [orderBy, setOrderBy] = useState('avg_monthly_searches')
   const [orderDir, setOrderDir] = useState('DESC')
+
+  // URL list collapsed state
+  const [urlsExpanded, setUrlsExpanded] = useState(false)
 
   // Loading states
   const [initialLoading, setInitialLoading] = useState(true)
@@ -176,27 +180,61 @@ export default function ReportDetailPage() {
           </div>
         )}
 
-        {/* URLs Section */}
-        <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">
-            URLs Analyzed ({reportMeta?.urls?.length || 0})
-          </h2>
-          <ul className="space-y-2">
-            {(reportMeta?.urls || []).map((url, index) => (
-              <li key={index} className="flex items-start">
-                <span className="text-blue-600 mr-2">•</span>
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-700 underline break-all"
+        {/* URLs Section — collapsible, shows first 10 by default */}
+        {(() => {
+          const allUrls = reportMeta?.urls || []
+          const hasMore = allUrls.length > URL_PREVIEW_COUNT
+          const visibleUrls = urlsExpanded ? allUrls : allUrls.slice(0, URL_PREVIEW_COUNT)
+          return (
+            <div className="bg-white rounded-lg shadow p-6 mb-8">
+              <button
+                onClick={() => setUrlsExpanded((e) => !e)}
+                className="w-full flex items-center justify-between text-left group"
+              >
+                <h2 className="text-xl font-semibold text-gray-900">
+                  URLs Analyzed ({allUrls.length})
+                </h2>
+                <svg
+                  className={`w-5 h-5 text-gray-400 group-hover:text-gray-600 transition-transform duration-200 ${urlsExpanded ? 'rotate-180' : ''}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
-                  {url}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {urlsExpanded && (
+                <div className="mt-4">
+                  <ul className="space-y-2">
+                    {visibleUrls.map((url, index) => (
+                      <li key={index} className="flex items-start">
+                        <span className="text-blue-600 mr-2">•</span>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-700 underline break-all text-sm"
+                        >
+                          {url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                  {hasMore && urlsExpanded && (
+                    <p className="mt-3 text-sm text-gray-500">
+                      Showing all {allUrls.length} URLs
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!urlsExpanded && (
+                <p className="mt-2 text-sm text-gray-500">
+                  Click to expand and view all {allUrls.length} URLs
+                </p>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Keywords Table */}
         <KeywordTable
