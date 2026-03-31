@@ -112,12 +112,9 @@ export default function PortfoliosPage() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <h3 className="text-lg font-semibold text-gray-900">{portfolio.name}</h3>
-                    <div className="mt-1 flex items-center gap-3 text-sm text-gray-500">
-                      <span>
-                        <span className="font-medium text-gray-700">{portfolio.total_items}</span>
-                        {' '}{portfolio.total_items === 1 ? 'item' : 'items'}
-                      </span>
-                      <span>•</span>
+                    <div className="mt-1 flex items-center gap-2 text-sm text-gray-600">
+                      <span>{portfolio.total_items} {portfolio.total_items === 1 ? 'item' : 'items'}</span>
+                      <span>·</span>
                       <span>Updated {formatDate(portfolio.updated_at)}</span>
                     </div>
                   </div>

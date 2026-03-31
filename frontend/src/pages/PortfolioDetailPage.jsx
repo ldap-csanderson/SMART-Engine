@@ -148,22 +148,18 @@ export default function PortfolioDetailPage() {
       <div className="mb-6">
         <button
           onClick={() => navigate('/portfolios')}
-          className="mb-4 inline-flex items-center text-sm text-gray-500 hover:text-gray-700"
+          className="inline-flex items-center text-blue-600 hover:text-blue-700 font-medium mb-4"
         >
-          <svg className="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
           Back to Portfolios
         </button>
         <h1 className="text-3xl font-bold text-gray-900">Edit Portfolio</h1>
-        {portfolio && (
-          <div className="mt-2 flex items-center text-sm text-gray-500">
-            <svg className="mr-1.5 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Created {new Date(portfolio.created_at).toLocaleDateString()}
-            {portfolio.updated_at && ` • Updated ${new Date(portfolio.updated_at).toLocaleDateString()}`}
-          </div>
+        {portfolio?.updated_at && (
+          <p className="mt-2 text-sm text-gray-500">
+            Updated {new Date(portfolio.updated_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </p>
         )}
       </div>
 
