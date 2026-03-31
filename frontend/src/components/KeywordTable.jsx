@@ -1,36 +1,14 @@
+import PaginationBar from './PaginationBar'
+import SortIcon from './SortIcon'
+
 const COLUMNS = [
-  { key: 'source_url', label: 'URL', sortable: true },
-  { key: 'keyword_text', label: 'Keyword', sortable: true },
-  { key: 'avg_monthly_searches', label: 'Avg Monthly Searches', sortable: true },
-  { key: 'competition_index', label: 'Competition', sortable: true },
-  { key: 'low_top_of_page_bid_usd', label: 'Low Bid (USD)', sortable: true },
-  { key: 'high_top_of_page_bid_usd', label: 'High Bid (USD)', sortable: true },
+  { key: 'source_url',              label: 'URL',                sortable: true, descFirst: false },
+  { key: 'keyword_text',            label: 'Keyword',            sortable: true, descFirst: false },
+  { key: 'avg_monthly_searches',    label: 'Avg Monthly Searches', sortable: true, descFirst: true },
+  { key: 'competition_index',       label: 'Competition',        sortable: true, descFirst: true },
+  { key: 'low_top_of_page_bid_usd', label: 'Low Bid (USD)',      sortable: true, descFirst: true },
+  { key: 'high_top_of_page_bid_usd',label: 'High Bid (USD)',     sortable: true, descFirst: true },
 ]
-
-// Columns where DESC is the natural first direction when clicking
-const DESC_FIRST = new Set([
-  'avg_monthly_searches', 'competition_index',
-  'low_top_of_page_bid_usd', 'high_top_of_page_bid_usd',
-])
-
-function SortIcon({ active, dir }) {
-  if (!active) {
-    return (
-      <svg className="inline w-3 h-3 ml-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4" />
-      </svg>
-    )
-  }
-  return dir === 'ASC' ? (
-    <svg className="inline w-3 h-3 ml-1 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-    </svg>
-  ) : (
-    <svg className="inline w-3 h-3 ml-1 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-    </svg>
-  )
-}
 
 export default function KeywordTable({
   keywords,
@@ -42,18 +20,13 @@ export default function KeywordTable({
   loading,
   onSort,
   onPageChange,
+  onPageSizeChange,
 }) {
-  const totalPages = Math.ceil(totalCount / pageSize)
-  const startRow = page * pageSize + 1
-  const endRow = Math.min((page + 1) * pageSize, totalCount)
-
-  const handleColumnClick = (colKey) => {
-    if (colKey === orderBy) {
-      // Toggle direction
-      onSort(colKey, orderDir === 'DESC' ? 'ASC' : 'DESC')
+  const handleColumnClick = (col) => {
+    if (col.key === orderBy) {
+      onSort(col.key, orderDir === 'DESC' ? 'ASC' : 'DESC')
     } else {
-      // New column: pick natural default direction
-      onSort(colKey, DESC_FIRST.has(colKey) ? 'DESC' : 'ASC')
+      onSort(col.key, col.descFirst ? 'DESC' : 'ASC')
     }
   }
 
@@ -80,7 +53,6 @@ export default function KeywordTable({
         )}
       </div>
 
-      {/* Table */}
       <div className={`overflow-x-auto transition-opacity duration-150 ${loading ? 'opacity-50' : 'opacity-100'}`}>
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -88,7 +60,7 @@ export default function KeywordTable({
               {COLUMNS.map((col) => (
                 <th
                   key={col.key}
-                  onClick={() => col.sortable && handleColumnClick(col.key)}
+                  onClick={() => col.sortable && handleColumnClick(col)}
                   className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider select-none ${
                     col.sortable ? 'cursor-pointer hover:bg-gray-100' : ''
                   }`}
@@ -141,54 +113,14 @@ export default function KeywordTable({
         </table>
       </div>
 
-      {/* Pagination bar */}
-      {totalCount > pageSize && (
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between bg-gray-50">
-          <button
-            onClick={() => onPageChange(page - 1)}
-            disabled={page === 0 || loading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            ← Previous
-          </button>
-
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">
-              {startRow.toLocaleString()}–{endRow.toLocaleString()} of {totalCount.toLocaleString()}
-            </span>
-            {totalPages <= 10 ? (
-              <div className="flex gap-1">
-                {Array.from({ length: totalPages }, (_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onPageChange(i)}
-                    disabled={loading}
-                    className={`w-8 h-8 text-xs rounded-md ${
-                      i === page
-                        ? 'bg-blue-600 text-white font-semibold'
-                        : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
-                    } disabled:opacity-40 disabled:cursor-not-allowed`}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <span className="text-sm text-gray-500">
-                Page {page + 1} of {totalPages.toLocaleString()}
-              </span>
-            )}
-          </div>
-
-          <button
-            onClick={() => onPageChange(page + 1)}
-            disabled={page >= totalPages - 1 || loading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Next →
-          </button>
-        </div>
-      )}
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        totalCount={totalCount}
+        loading={loading}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </div>
   )
 }

@@ -459,6 +459,7 @@ def get_gap_analysis_results(
     offset: int = 0,
     order_by: str = "semantic_distance",
     order_dir: str = "DESC",
+    min_monthly_searches: int = 0,
     filter_execution_ids: Optional[List[str]] = Query(default=None),
     filter_execution_ids_false: Optional[List[str]] = Query(default=None),
 ):
@@ -516,6 +517,8 @@ def get_gap_analysis_results(
             )"""
 
         base_where = f"WHERE g.analysis_id = '{analysis_id}'"
+        if min_monthly_searches > 0:
+            base_where += f" AND g.avg_monthly_searches >= {min_monthly_searches}"
 
         rows = bq_client.query(f"""
             SELECT

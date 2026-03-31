@@ -10,35 +10,33 @@ export default function ReportDetailPage() {
   const { reportId } = useParams()
   const navigate = useNavigate()
 
-  // Report metadata (fetched once, cached)
   const [reportMeta, setReportMeta] = useState(null)
 
   // Keyword page state
   const [keywords, setKeywords] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [page, setPage] = useState(0)
-  const [pageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [orderBy, setOrderBy] = useState('avg_monthly_searches')
   const [orderDir, setOrderDir] = useState('DESC')
 
-  // URL list collapsed state
   const [urlsExpanded, setUrlsExpanded] = useState(false)
 
-  // Loading states
   const [initialLoading, setInitialLoading] = useState(true)
   const [tableLoading, setTableLoading] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState(null)
 
-  const fetchKeywords = useCallback(async (pg, ob, od, isInitial = false) => {
+  // pg, ps, ob, od are passed explicitly so handlers can use new values before state settles
+  const fetchKeywords = useCallback(async (pg, ps, ob, od, isInitial = false) => {
     if (isInitial) setInitialLoading(true)
     else setTableLoading(true)
     setError(null)
 
     try {
       const params = new URLSearchParams({
-        limit: pageSize,
-        offset: pg * pageSize,
+        limit: ps,
+        offset: pg * ps,
         order_by: ob,
         order_dir: od,
       })
@@ -48,13 +46,13 @@ export default function ReportDetailPage() {
 
       if (isInitial || !reportMeta) {
         setReportMeta({
-          report_id: data.report_id,
-          name: data.name,
-          created_at: data.created_at,
-          status: data.status,
-          urls: data.urls,
-          total_keywords_found: data.total_keywords_found,
-          error_message: data.error_message,
+          report_id:             data.report_id,
+          name:                  data.name,
+          created_at:            data.created_at,
+          status:                data.status,
+          urls:                  data.urls,
+          total_keywords_found:  data.total_keywords_found,
+          error_message:         data.error_message,
         })
       }
 
@@ -67,19 +65,30 @@ export default function ReportDetailPage() {
       if (isInitial) setInitialLoading(false)
       else setTableLoading(false)
     }
-  }, [reportId, pageSize])
+  }, [reportId])   // pageSize, orderBy, orderDir intentionally excluded — passed explicitly
 
   // Initial load
   useEffect(() => {
-    fetchKeywords(0, orderBy, orderDir, true)
+    fetchKeywords(0, DEFAULT_PAGE_SIZE, orderBy, orderDir, true)
   }, [reportId])
 
-  // Re-fetch when sort changes (reset to page 0)
   const handleSort = (newOrderBy, newOrderDir) => {
     setOrderBy(newOrderBy)
     setOrderDir(newOrderDir)
     setPage(0)
-    fetchKeywords(0, newOrderBy, newOrderDir, false)
+    fetchKeywords(0, pageSize, newOrderBy, newOrderDir, false)
+  }
+
+  const handlePageChange = (newPage) => {
+    setPage(newPage)
+    fetchKeywords(newPage, pageSize, orderBy, orderDir, false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handlePageSizeChange = (newPageSize) => {
+    setPageSize(newPageSize)
+    setPage(0)
+    fetchKeywords(0, newPageSize, orderBy, orderDir, false)
   }
 
   const handleRename = async (newName) => {
@@ -97,13 +106,6 @@ export default function ReportDetailPage() {
     } finally {
       setRenaming(false)
     }
-  }
-
-  // Re-fetch when page changes
-  const handlePageChange = (newPage) => {
-    setPage(newPage)
-    fetchKeywords(newPage, orderBy, orderDir, false)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   if (initialLoading) {
@@ -164,10 +166,10 @@ export default function ReportDetailPage() {
               />
               <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
                 <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
-                  reportMeta?.status === 'completed' ? 'bg-green-100 text-green-800' :
-                  reportMeta?.status === 'archived'  ? 'bg-gray-100 text-gray-800' :
+                  reportMeta?.status === 'completed'  ? 'bg-green-100 text-green-800' :
+                  reportMeta?.status === 'archived'   ? 'bg-gray-100 text-gray-800' :
                   reportMeta?.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                  reportMeta?.status === 'failed'    ? 'bg-red-100 text-red-800' :
+                  reportMeta?.status === 'failed'     ? 'bg-red-100 text-red-800' :
                   'bg-yellow-100 text-yellow-800'
                 }`}>
                   {reportMeta?.status === 'processing' ? 'In Progress' : reportMeta?.status}
@@ -201,11 +203,9 @@ export default function ReportDetailPage() {
           </div>
         )}
 
-        {/* URLs Section — collapsible, shows first 10 by default */}
+        {/* URLs Section — collapsible */}
         {(() => {
           const allUrls = reportMeta?.urls || []
-          const hasMore = allUrls.length > URL_PREVIEW_COUNT
-          const visibleUrls = urlsExpanded ? allUrls : allUrls.slice(0, URL_PREVIEW_COUNT)
           return (
             <div className="bg-white rounded-lg shadow p-6 mb-8">
               <button
@@ -226,7 +226,7 @@ export default function ReportDetailPage() {
               {urlsExpanded && (
                 <div className="mt-4">
                   <ul className="space-y-2">
-                    {visibleUrls.map((url, index) => (
+                    {allUrls.map((url, index) => (
                       <li key={index} className="flex items-start">
                         <span className="text-blue-600 mr-2">•</span>
                         <a
@@ -240,11 +240,6 @@ export default function ReportDetailPage() {
                       </li>
                     ))}
                   </ul>
-                  {hasMore && urlsExpanded && (
-                    <p className="mt-3 text-sm text-gray-500">
-                      Showing all {allUrls.length} URLs
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -268,6 +263,7 @@ export default function ReportDetailPage() {
           loading={tableLoading}
           onSort={handleSort}
           onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
         />
       </div>
     </div>
