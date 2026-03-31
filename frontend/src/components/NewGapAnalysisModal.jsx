@@ -311,20 +311,37 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
               {/* Cost estimate box */}
               <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm font-semibold text-amber-800 mb-2">Estimated Cost</p>
+
+                {/* Analysis subtotal */}
                 <div className="flex justify-between items-start gap-4">
                   <div className="text-sm text-amber-700 space-y-0.5">
                     <p className="font-medium">{estimate.unique_keywords.toLocaleString()} unique keywords</p>
                     <p className="pl-2 text-xs text-amber-600">LLM (intent generation): ~${estimate.estimated_llm_cost_usd.toFixed(2)}</p>
                     <p className="pl-2 text-xs text-amber-600">Embeddings (text-embedding-005): ~${estimate.estimated_embedding_cost_usd.toFixed(2)}</p>
                   </div>
-                  <span className="text-2xl font-bold text-amber-900 whitespace-nowrap">
+                  <span className={`font-bold text-amber-900 whitespace-nowrap ${selectedFilterIds.length > 0 ? 'text-base' : 'text-2xl'}`}>
                     ~${estimate.estimated_cost_usd.toFixed(2)}
                   </span>
                 </div>
+
+                {/* Filter cost + grand total */}
                 {selectedFilterIds.length > 0 && (
-                  <p className="text-xs text-amber-600 mt-2">
-                    + ~${(estimate.estimated_cost_usd * selectedFilterIds.length).toFixed(2)} for {selectedFilterIds.length} filter{selectedFilterIds.length > 1 ? 's' : ''}
-                  </p>
+                  <>
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-amber-200">
+                      <span className="text-xs text-amber-600">
+                        + {selectedFilterIds.length} filter{selectedFilterIds.length > 1 ? 's' : ''} × ~${estimate.estimated_cost_usd.toFixed(2)}
+                      </span>
+                      <span className="text-base font-medium text-amber-900 whitespace-nowrap">
+                        ~${(estimate.estimated_cost_usd * selectedFilterIds.length).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1 pt-1 border-t border-amber-300">
+                      <span className="text-xs font-semibold text-amber-800">Total</span>
+                      <span className="text-2xl font-bold text-amber-900 whitespace-nowrap">
+                        ~${(estimate.estimated_cost_usd * (1 + selectedFilterIds.length)).toFixed(2)}
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
 
