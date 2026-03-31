@@ -1,51 +1,89 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import KeywordTable from '../components/KeywordTable'
+
+const DEFAULT_PAGE_SIZE = 100
 
 export default function ReportDetailPage() {
   const { reportId } = useParams()
   const navigate = useNavigate()
-  const [reportData, setReportData] = useState(null)
+
+  // Report metadata (fetched once, cached)
+  const [reportMeta, setReportMeta] = useState(null)
+
+  // Keyword page state
   const [keywords, setKeywords] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [totalCount, setTotalCount] = useState(0)
+  const [page, setPage] = useState(0)
+  const [pageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [orderBy, setOrderBy] = useState('avg_monthly_searches')
+  const [orderDir, setOrderDir] = useState('DESC')
+
+  // Loading states
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [tableLoading, setTableLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    const fetchReportDetails = async () => {
-      setLoading(true)
-      setError(null)
+  const fetchKeywords = useCallback(async (pg, ob, od, isInitial = false) => {
+    if (isInitial) setInitialLoading(true)
+    else setTableLoading(true)
+    setError(null)
 
-      try {
-        const response = await fetch(`/api/keyword-reports/${reportId}/keywords`)
+    try {
+      const params = new URLSearchParams({
+        limit: pageSize,
+        offset: pg * pageSize,
+        order_by: ob,
+        order_dir: od,
+      })
+      const res = await fetch(`/api/keyword-reports/${reportId}/keywords?${params}`)
+      if (!res.ok) throw new Error('Failed to load report details')
+      const data = await res.json()
 
-        if (!response.ok) {
-          throw new Error('Failed to load report details')
-        }
-
-        const data = await response.json()
-        setReportData(data)
-
-        // Flatten keywords for table
-        const flatKeywords = []
-        Object.entries(data.keywords).forEach(([url, keywordList]) => {
-          keywordList.forEach((keyword) => {
-            flatKeywords.push({ url, ...keyword })
-          })
+      if (isInitial || !reportMeta) {
+        setReportMeta({
+          report_id: data.report_id,
+          name: data.name,
+          created_at: data.created_at,
+          status: data.status,
+          urls: data.urls,
+          total_keywords_found: data.total_keywords_found,
+          error_message: data.error_message,
         })
-
-        setKeywords(flatKeywords)
-      } catch (err) {
-        console.error('Failed to fetch report details:', err)
-        setError(err.message)
-      } finally {
-        setLoading(false)
       }
-    }
 
-    fetchReportDetails()
+      setKeywords(data.keywords || [])
+      setTotalCount(data.total_count || data.total_keywords_found || 0)
+    } catch (err) {
+      console.error('Failed to fetch keywords:', err)
+      setError(err.message)
+    } finally {
+      if (isInitial) setInitialLoading(false)
+      else setTableLoading(false)
+    }
+  }, [reportId, pageSize])
+
+  // Initial load
+  useEffect(() => {
+    fetchKeywords(0, orderBy, orderDir, true)
   }, [reportId])
 
-  if (loading) {
+  // Re-fetch when sort changes (reset to page 0)
+  const handleSort = (newOrderBy, newOrderDir) => {
+    setOrderBy(newOrderBy)
+    setOrderDir(newOrderDir)
+    setPage(0)
+    fetchKeywords(0, newOrderBy, newOrderDir, false)
+  }
+
+  // Re-fetch when page changes
+  const handlePageChange = (newPage) => {
+    setPage(newPage)
+    fetchKeywords(newPage, orderBy, orderDir, false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  if (initialLoading) {
     return (
       <div className="bg-gray-50">
         <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -58,14 +96,14 @@ export default function ReportDetailPage() {
     )
   }
 
-  if (error || !reportData) {
+  if (error && !reportMeta) {
     return (
       <div className="bg-gray-50">
         <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
           <div className="bg-white rounded-lg shadow p-8">
             <div className="text-red-600 mb-4">
               <p className="font-semibold">Error loading report</p>
-              <p className="text-sm">{error || 'Report not found'}</p>
+              <p className="text-sm">{error}</p>
             </div>
             <button
               onClick={() => navigate('/keyword-reports')}
@@ -82,7 +120,7 @@ export default function ReportDetailPage() {
   return (
     <div className="bg-gray-50">
       <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Back Button */}
+        {/* Back Button + Header */}
         <div className="mb-8">
           <button
             onClick={() => navigate('/keyword-reports')}
@@ -97,29 +135,29 @@ export default function ReportDetailPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">
-                {reportData.name || reportData.report_id}
+                {reportMeta?.name || reportId}
               </h1>
               <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
                 <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
-                  reportData.status === 'completed' ? 'bg-green-100 text-green-800' :
-                  reportData.status === 'archived'  ? 'bg-gray-100 text-gray-800' :
-                  reportData.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                  reportData.status === 'failed'    ? 'bg-red-100 text-red-800' :
+                  reportMeta?.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  reportMeta?.status === 'archived'  ? 'bg-gray-100 text-gray-800' :
+                  reportMeta?.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                  reportMeta?.status === 'failed'    ? 'bg-red-100 text-red-800' :
                   'bg-yellow-100 text-yellow-800'
                 }`}>
-                  {reportData.status === 'processing' ? 'In Progress' : reportData.status}
+                  {reportMeta?.status === 'processing' ? 'In Progress' : reportMeta?.status}
                 </span>
                 <span>·</span>
-                <span>{reportData.urls?.length || 0} URLs</span>
+                <span>{reportMeta?.urls?.length || 0} URLs</span>
                 <span>·</span>
-                <span>{reportData.total_keywords_found.toLocaleString()} keywords</span>
+                <span>{(reportMeta?.total_keywords_found || 0).toLocaleString()} keywords</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Failed report warning banner */}
-        {reportData.status === 'failed' && (
+        {/* Failed report warning */}
+        {reportMeta?.status === 'failed' && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
             <div className="flex items-start gap-3">
               <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -127,8 +165,8 @@ export default function ReportDetailPage() {
               </svg>
               <div>
                 <p className="font-semibold text-red-800">This report failed to complete</p>
-                {reportData.error_message && (
-                  <p className="text-sm text-red-700 mt-1">{reportData.error_message}</p>
+                {reportMeta.error_message && (
+                  <p className="text-sm text-red-700 mt-1">{reportMeta.error_message}</p>
                 )}
                 <p className="text-sm text-red-600 mt-1">
                   Partial results may be shown if any keywords were fetched before the failure.
@@ -141,10 +179,10 @@ export default function ReportDetailPage() {
         {/* URLs Section */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">
-            URLs Analyzed ({reportData.urls.length})
+            URLs Analyzed ({reportMeta?.urls?.length || 0})
           </h2>
           <ul className="space-y-2">
-            {reportData.urls.map((url, index) => (
+            {(reportMeta?.urls || []).map((url, index) => (
               <li key={index} className="flex items-start">
                 <span className="text-blue-600 mr-2">•</span>
                 <a
@@ -161,7 +199,17 @@ export default function ReportDetailPage() {
         </div>
 
         {/* Keywords Table */}
-        <KeywordTable keywords={keywords} />
+        <KeywordTable
+          keywords={keywords}
+          totalCount={totalCount}
+          page={page}
+          pageSize={pageSize}
+          orderBy={orderBy}
+          orderDir={orderDir}
+          loading={tableLoading}
+          onSort={handleSort}
+          onPageChange={handlePageChange}
+        />
       </div>
     </div>
   )

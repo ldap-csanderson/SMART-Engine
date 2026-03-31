@@ -225,10 +225,34 @@ def list_keyword_reports(status: Optional[str] = None, limit: int = 100):
         raise HTTPException(500, str(e))
 
 
+_VALID_KW_ORDER_BY = {
+    "avg_monthly_searches", "keyword_text", "competition_index",
+    "low_top_of_page_bid_usd", "high_top_of_page_bid_usd", "source_url",
+}
+
+
 @router.get("/{report_id}/keywords")
-def get_report_keywords(report_id: str):
+def get_report_keywords(
+    report_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str = "avg_monthly_searches",
+    order_dir: str = "DESC",
+):
+    """
+    Paginated, server-sorted keyword results for a report.
+    Returns a flat list of keywords with source_url included per row.
+    Uses total_keywords_found from Firestore for total_count (avoids a COUNT query on large tables).
+    """
     if not db or not bq_client:
         raise HTTPException(503, "Service not initialized")
+
+    if order_by not in _VALID_KW_ORDER_BY:
+        order_by = "avg_monthly_searches"
+    order_dir = "DESC" if order_dir.upper() == "DESC" else "ASC"
+    limit = min(max(1, limit), 500)
+    offset = max(0, offset)
+
     report_doc = db.collection("keyword_reports").document(report_id).get()
     if not report_doc.exists:
         raise HTTPException(404, f"Report {report_id} not found")
@@ -239,26 +263,29 @@ def get_report_keywords(report_id: str):
                competition_index, low_top_of_page_bid_usd, high_top_of_page_bid_usd
         FROM `{PROJECT_ID}.{DATASET_ID}.{T_RESULTS}`
         WHERE run_id = '{report_id}'
-        ORDER BY source_url, avg_monthly_searches DESC
+        ORDER BY {order_by} {order_dir} NULLS LAST
+        LIMIT {limit} OFFSET {offset}
     """).result()
 
-    by_url: Dict[str, list] = {}
-    for row in rows:
-        by_url.setdefault(row.source_url, []).append({
-            "keyword_text": row.keyword_text,
-            "avg_monthly_searches": row.avg_monthly_searches,
-            "competition": row.competition,
-            "competition_index": row.competition_index,
-            "low_top_of_page_bid_usd": row.low_top_of_page_bid_usd,
-            "high_top_of_page_bid_usd": row.high_top_of_page_bid_usd,
-        })
+    keywords = [{
+        "source_url": row.source_url,
+        "keyword_text": row.keyword_text,
+        "avg_monthly_searches": row.avg_monthly_searches,
+        "competition": row.competition,
+        "competition_index": row.competition_index,
+        "low_top_of_page_bid_usd": row.low_top_of_page_bid_usd,
+        "high_top_of_page_bid_usd": row.high_top_of_page_bid_usd,
+    } for row in rows]
 
     return {
         "report_id": rd["report_id"], "name": rd.get("name", "Unnamed"),
         "created_at": ts_to_str(rd["created_at"]), "status": rd["status"],
         "urls": rd["urls"], "total_keywords_found": rd["total_keywords_found"],
         "error_message": rd.get("error_message"),
-        "keywords": by_url,
+        "keywords": keywords,
+        "total_count": rd.get("total_keywords_found", 0),
+        "limit": limit,
+        "offset": offset,
     }
 
 
