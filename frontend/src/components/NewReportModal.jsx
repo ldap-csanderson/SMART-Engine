@@ -122,14 +122,19 @@ export default function NewReportModal({ isOpen, onClose, onCreated }) {
               </label>
               <textarea
                 id="urls"
-                rows="6"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                rows="15"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
                 placeholder={'https://www.example.com\nhttps://www.another-site.com'}
                 value={urls}
                 onChange={(e) => setUrls(e.target.value)}
                 disabled={submitting}
                 required
               />
+              {urls.trim() && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {urls.split('\n').map(u => u.trim()).filter(u => u.length > 0).length} URL{urls.split('\n').map(u => u.trim()).filter(u => u.length > 0).length === 1 ? '' : 's'}
+                </p>
+              )}
             </div>
 
             {/* Error Message */}
