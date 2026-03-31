@@ -69,7 +69,9 @@ class GapAnalysisEstimateRequest(BaseModel):
 
 class GapAnalysisEstimateResponse(BaseModel):
     unique_keywords: int
-    estimated_cost_usd: float
+    estimated_llm_cost_usd: float
+    estimated_embedding_cost_usd: float
+    estimated_cost_usd: float  # total
 
 
 class PortfolioSnapshot(BaseModel):
@@ -344,14 +346,19 @@ def estimate_gap_analysis(payload: GapAnalysisEstimateRequest):
     except Exception as e:
         raise HTTPException(500, f"Failed to count keywords: {e}")
 
-    # $0.25/1M input tokens, $1.50/1M output tokens
-    # ~200 input + ~50 output tokens per keyword
-    cost_per_keyword = (200 * 0.25 + 50 * 1.50) / 1_000_000  # = $0.000125
-    estimated_cost = round(unique_keywords * cost_per_keyword, 2)
+    # LLM cost: $0.25/1M input + $1.50/1M output, ~200 input + ~50 output tokens/keyword
+    llm_cost_per_keyword = (200 * 0.25 + 50 * 1.50) / 1_000_000  # $0.000125
+    estimated_llm_cost = round(unique_keywords * llm_cost_per_keyword, 2)
+
+    # Embedding cost: text-embedding-005 at $0.000025/1K characters, ~100 chars/intent string
+    emb_cost_per_keyword = 100 * 0.000025 / 1_000  # $0.0000025
+    estimated_emb_cost = round(unique_keywords * emb_cost_per_keyword, 2)
 
     return GapAnalysisEstimateResponse(
         unique_keywords=unique_keywords,
-        estimated_cost_usd=estimated_cost,
+        estimated_llm_cost_usd=estimated_llm_cost,
+        estimated_embedding_cost_usd=estimated_emb_cost,
+        estimated_cost_usd=round(estimated_llm_cost + estimated_emb_cost, 2),
     )
 
 

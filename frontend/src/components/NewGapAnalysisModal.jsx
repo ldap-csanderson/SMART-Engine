@@ -311,11 +311,13 @@ export default function NewGapAnalysisModal({ isOpen, onClose, onCreated }) {
               {/* Cost estimate box */}
               <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm font-semibold text-amber-800 mb-2">Estimated Cost</p>
-                <div className="flex justify-between items-baseline">
-                  <span className="text-sm text-amber-700">
-                    {estimate.unique_keywords.toLocaleString()} unique keywords × ~250 tokens
-                  </span>
-                  <span className="text-2xl font-bold text-amber-900">
+                <div className="flex justify-between items-start gap-4">
+                  <div className="text-sm text-amber-700 space-y-0.5">
+                    <p className="font-medium">{estimate.unique_keywords.toLocaleString()} unique keywords</p>
+                    <p className="pl-2 text-xs text-amber-600">LLM (intent generation): ~${estimate.estimated_llm_cost_usd.toFixed(2)}</p>
+                    <p className="pl-2 text-xs text-amber-600">Embeddings (text-embedding-005): ~${estimate.estimated_embedding_cost_usd.toFixed(2)}</p>
+                  </div>
+                  <span className="text-2xl font-bold text-amber-900 whitespace-nowrap">
                     ~${estimate.estimated_cost_usd.toFixed(2)}
                   </span>
                 </div>
