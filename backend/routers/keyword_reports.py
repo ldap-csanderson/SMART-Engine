@@ -289,6 +289,22 @@ def get_report_keywords(
     }
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+
+@router.patch("/{report_id}/rename")
+def rename_report(report_id: str, payload: RenameRequest):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Name cannot be empty")
+    ref = db.collection("keyword_reports").document(report_id)
+    if not ref.get().exists:
+        raise HTTPException(404, f"Report {report_id} not found")
+    ref.update({"name": name})
+    return {"report_id": report_id, "name": name}
+
+
 @router.patch("/{report_id}/archive")
 def archive_report(report_id: str):
     ref = db.collection("keyword_reports").document(report_id)

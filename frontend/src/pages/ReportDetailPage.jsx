@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import KeywordTable from '../components/KeywordTable'
+import EditableTitle from '../components/EditableTitle'
 
 const DEFAULT_PAGE_SIZE = 100
 const URL_PREVIEW_COUNT = 10
@@ -26,6 +27,7 @@ export default function ReportDetailPage() {
   // Loading states
   const [initialLoading, setInitialLoading] = useState(true)
   const [tableLoading, setTableLoading] = useState(false)
+  const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState(null)
 
   const fetchKeywords = useCallback(async (pg, ob, od, isInitial = false) => {
@@ -78,6 +80,23 @@ export default function ReportDetailPage() {
     setOrderDir(newOrderDir)
     setPage(0)
     fetchKeywords(0, newOrderBy, newOrderDir, false)
+  }
+
+  const handleRename = async (newName) => {
+    setRenaming(true)
+    try {
+      const res = await fetch(`/api/keyword-reports/${reportId}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      })
+      if (!res.ok) throw new Error('Failed to rename report')
+      setReportMeta((prev) => ({ ...prev, name: newName }))
+    } catch (err) {
+      console.error('Rename failed:', err)
+    } finally {
+      setRenaming(false)
+    }
   }
 
   // Re-fetch when page changes
@@ -138,9 +157,11 @@ export default function ReportDetailPage() {
 
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                {reportMeta?.name || reportId}
-              </h1>
+              <EditableTitle
+                value={reportMeta?.name || reportId}
+                onSave={handleRename}
+                saving={renaming}
+              />
               <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
                 <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
                   reportMeta?.status === 'completed' ? 'bg-green-100 text-green-800' :

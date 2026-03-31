@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import RunFiltersModal from '../components/RunFiltersModal'
+import EditableTitle from '../components/EditableTitle'
 
 // Three-state toggle: any → true → false → any
 function FilterModeToggle({ label, mode, onChange, onDelete }) {
@@ -61,6 +62,7 @@ export default function GapAnalysisDetailPage() {
   const [highlightThreshold, setHighlightThreshold] = useState(0.2)
   const [highlightInput, setHighlightInput] = useState('0.2')
 
+  const [renaming, setRenaming] = useState(false)
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
   const [portfolioSnapshot, setPortfolioSnapshot] = useState(null)
   const loadedFilterResultsRef = useRef(new Set())
@@ -247,6 +249,23 @@ export default function GapAnalysisDetailPage() {
     }
   }
 
+  const handleRename = async (newName) => {
+    setRenaming(true)
+    try {
+      const res = await fetch(`/api/gap-analyses/${analysisId}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      })
+      if (!res.ok) throw new Error('Failed to rename analysis')
+      setAnalysis((prev) => ({ ...prev, name: newName }))
+    } catch (err) {
+      console.error('Rename failed:', err)
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   const handleMinSearchesBlur = () => {
     const v = parseInt(minSearchesInput, 10)
     if (!isNaN(v) && v >= 0) setMinSearches(v)
@@ -362,7 +381,7 @@ export default function GapAnalysisDetailPage() {
             </svg>
             Back to Gap Analyses
           </button>
-          <h1 className="text-3xl font-bold text-gray-900">{analysis.name}</h1>
+          <EditableTitle value={analysis.name} onSave={handleRename} saving={renaming} />
           <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
             <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
               analysis.status === 'completed' ? 'bg-green-100 text-green-800' :

@@ -568,6 +568,24 @@ def get_gap_analysis_results(
         raise HTTPException(500, str(e))
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+
+@router.patch("/{analysis_id}/rename")
+def rename_gap_analysis(analysis_id: str, payload: RenameRequest):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Name cannot be empty")
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    ref = db.collection("gap_analyses").document(analysis_id)
+    if not ref.get().exists:
+        raise HTTPException(404, f"Analysis {analysis_id} not found")
+    ref.update({"name": name})
+    return {"analysis_id": analysis_id, "name": name}
+
+
 @router.patch("/{analysis_id}/archive")
 def archive_gap_analysis(analysis_id: str):
     if not db:
