@@ -187,7 +187,9 @@ def run_gap_analysis_pipeline(
             SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
         """, "Step 3b: portfolio intents for uncached items")
 
-        # Step 3c: insert new embeddings into v2 cache
+        # Step 3c: insert new embeddings into v2 cache.
+        # Re-check at write time (NOT IN subquery) to prevent duplicate rows if two
+        # analyses for the same portfolio race past the step-3a uncached check simultaneously.
         run_bq(f"""
             INSERT INTO {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
               (portfolio_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
@@ -202,6 +204,11 @@ def run_gap_analysis_pipeline(
                 WHERE intent_string IS NOT NULL
               ),
               {_EMB_OPTS}
+            )
+            WHERE item_text NOT IN (
+              SELECT item_text
+              FROM {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
+              WHERE portfolio_id = '{portfolio_id}' AND prompt_hash = '{ph}'
             )
         """, "Step 3c: populate portfolio embeddings cache (v2)")
 
