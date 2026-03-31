@@ -232,7 +232,7 @@ def run_gap_analysis_pipeline(
             (SELECT keyword_text, intent_string, embedding FROM {_t(tmp_kw_emb)}),
             top_k => 3,
             distance_type => 'COSINE',
-            use_brute_force => TRUE
+            options => JSON '{{"use_brute_force": true}}'
           )
           INNER JOIN {_t(T_PORTFOLIO_ITEMS_V2)} pi
             ON base.item_text = pi.item_text AND base.portfolio_id = pi.portfolio_id
