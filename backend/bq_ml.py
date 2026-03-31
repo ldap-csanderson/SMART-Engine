@@ -119,6 +119,7 @@ def run_gap_analysis_pipeline(
     portfolio_id: str,
     keyword_prompt: str,
     portfolio_prompt: str,
+    min_monthly_searches: int = 1000,
 ) -> int:
     """
     Run the full 5-step gap analysis pipeline using v2 tables with portfolio_id.
@@ -146,6 +147,7 @@ def run_gap_analysis_pipeline(
                 CONCAT('{kp}', '\\n\\nKeyword: ', keyword_text, '{_INTENT_JSON_SUFFIX}') AS prompt
               FROM {_t(T_RESULTS)}
               WHERE run_id = '{report_id}'
+                AND avg_monthly_searches >= {min_monthly_searches}
             ),
             {_LLM_OPTS}
           )

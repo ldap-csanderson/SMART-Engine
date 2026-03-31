@@ -59,6 +59,17 @@ class GapAnalysisCreate(BaseModel):
     name: str
     portfolio_id: str
     filter_ids: Optional[List[str]] = None
+    min_monthly_searches: int = 1000
+
+
+class GapAnalysisEstimateRequest(BaseModel):
+    report_id: str
+    min_monthly_searches: int = 1000
+
+
+class GapAnalysisEstimateResponse(BaseModel):
+    unique_keywords: int
+    estimated_cost_usd: float
 
 
 class PortfolioSnapshot(BaseModel):
@@ -151,7 +162,7 @@ def _run_filter_execution(execution_id: str, analysis_id: str, filter_snapshot: 
             pass
 
 
-def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str, filter_ids: Optional[List[str]] = None):
+def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str, filter_ids: Optional[List[str]] = None, min_monthly_searches: int = 1000):
     """Background task: run the full gap analysis pipeline, then any chained filters."""
     print(f"🔄 Gap analysis {analysis_id} started")
     try:
@@ -163,6 +174,7 @@ def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str
                     SELECT COUNT(DISTINCT keyword_text)
                     FROM {results_table}
                     WHERE run_id = '{report_id}'
+                      AND avg_monthly_searches >= {min_monthly_searches}
                 """).result()
                 kw_count = list(kw_rows)[0][0] or 0
                 db.collection("gap_analyses").document(analysis_id).update({
@@ -179,6 +191,7 @@ def _run_analysis_background(analysis_id: str, report_id: str, portfolio_id: str
             portfolio_id=portfolio_id,
             keyword_prompt=prompts["keyword_intent_prompt"],
             portfolio_prompt=prompts["portfolio_intent_prompt"],
+            min_monthly_searches=min_monthly_searches,
         )
         db.collection("gap_analyses").document(analysis_id).update({
             "status": "completed",
@@ -275,13 +288,16 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "report_id": payload.report_id,
         "portfolio_id": payload.portfolio_id,
         "portfolio_snapshot": portfolio_snapshot,
+        "min_monthly_searches": payload.min_monthly_searches,
         "status": "processing",
         "created_at": firestore.SERVER_TIMESTAMP,
         "total_keywords_analyzed": 0,
         "error_message": None,
     })
     background_tasks.add_task(
-        _run_analysis_background, analysis_id, payload.report_id, payload.portfolio_id, payload.filter_ids
+        _run_analysis_background,
+        analysis_id, payload.report_id, payload.portfolio_id,
+        payload.filter_ids, payload.min_monthly_searches,
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
@@ -295,6 +311,45 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         status=doc["status"],
         created_at=ts_to_str(doc["created_at"]),
         total_keywords_analyzed=doc["total_keywords_analyzed"],
+    )
+
+
+@router.post("/estimate", response_model=GapAnalysisEstimateResponse)
+def estimate_gap_analysis(payload: GapAnalysisEstimateRequest):
+    """
+    Return the number of unique keywords (after min_monthly_searches filter)
+    and the estimated LLM cost for running a gap analysis on this report.
+    Cost model: 200 input tokens + 50 output tokens per unique keyword,
+    at $0.25/1M input and $1.50/1M output.
+    """
+    if not bq_client:
+        raise HTTPException(503, "BigQuery not initialized")
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+
+    report_doc = db.collection("keyword_reports").document(payload.report_id).get()
+    if not report_doc.exists:
+        raise HTTPException(404, f"Keyword report {payload.report_id} not found")
+
+    try:
+        row = bq_client.query(f"""
+            SELECT COUNT(DISTINCT keyword_text)
+            FROM `{PROJECT_ID}.{DATASET_ID}.{T_RESULTS}`
+            WHERE run_id = '{payload.report_id}'
+              AND avg_monthly_searches >= {payload.min_monthly_searches}
+        """).result()
+        unique_keywords = list(row)[0][0] or 0
+    except Exception as e:
+        raise HTTPException(500, f"Failed to count keywords: {e}")
+
+    # $0.25/1M input tokens, $1.50/1M output tokens
+    # ~200 input + ~50 output tokens per keyword
+    cost_per_keyword = (200 * 0.25 + 50 * 1.50) / 1_000_000  # = $0.000125
+    estimated_cost = round(unique_keywords * cost_per_keyword, 2)
+
+    return GapAnalysisEstimateResponse(
+        unique_keywords=unique_keywords,
+        estimated_cost_usd=estimated_cost,
     )
 
 
