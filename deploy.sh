@@ -1,50 +1,52 @@
 #!/bin/bash
 set -e
 
-# Configuration
+# Configuration — edit these for each deployment target
 PROJECT_ID="gap-analysis-nlf"
 REGION="us-central1"
 REPO="app"
 IMAGE_NAME="gap-analysis"
+SERVICE_NAME="gap-analysis"
+
+IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
 
 echo "🚀 Gap Analysis Deployment Script"
 echo "===================================="
 echo "Project: $PROJECT_ID"
-echo "Region: $REGION"
+echo "Region:  $REGION"
+echo "Image:   $IMAGE_TAG"
 echo ""
 
-# Check if gcloud is authenticated
+# Check gcloud auth
 if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q "@"; then
     echo "❌ Not authenticated with gcloud. Please run: gcloud auth login"
     exit 1
 fi
 
-# Set the project
-gcloud config set project $PROJECT_ID
+gcloud config set project "$PROJECT_ID"
 
-echo "🏗️  Deploying infrastructure with Terraform..."
-cd terraform
-terraform apply -auto-approve -var="app_image=us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
-cd ..
-
-echo ""
-echo "📦 Building and pushing Docker image (frontend + backend)..."
+echo "📦 Building and pushing Docker image..."
 gcloud builds submit . \
-  --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest \
+  --project="$PROJECT_ID" \
+  --tag "$IMAGE_TAG" \
   --timeout=15m
 
 echo ""
-echo "🔄 Updating Cloud Run with new image..."
-cd terraform
-terraform apply -auto-approve
-cd ..
+echo "🔄 Updating Cloud Run service with new image..."
+gcloud run services update "$SERVICE_NAME" \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --image="$IMAGE_TAG"
 
 echo ""
 echo "✅ Deployment complete!"
 echo ""
-echo "📋 Application URL:"
-cd terraform
-echo "   $(terraform output -raw app_url)"
-cd ..
+URL=$(gcloud run services describe "$SERVICE_NAME" \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --format="value(status.url)" 2>/dev/null || echo "(could not retrieve URL)")
+echo "📋 Application URL: $URL"
 echo ""
-echo "💡 To update the application, simply run: ./deploy.sh"
+echo "💡 To redeploy, simply run: ./deploy.sh"
+echo "⚠️  NOTE: This script does NOT run Terraform."
+echo "   Run Terraform manually only when changing infrastructure."
