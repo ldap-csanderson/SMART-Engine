@@ -225,11 +225,11 @@ def run_gap_analysis_pipeline(
             )
         """, "Step 3c: populate portfolio embeddings cache (v2)")
 
-    # Step 4: compute top-3 distances via VECTOR_SEARCH and insert results.
-    # VECTOR_SEARCH uses an ANN index (IVF) on portfolio_embeddings_v2 to avoid
-    # the brute-force CROSS JOIN that exceeds BQ's on-demand CPU limit for large
-    # analyses. Falls back to brute-force automatically if the index is not ready
-    # or the filtered subset is too small to use the index.
+    # Step 4: compute top-3 distances via VECTOR_SEARCH (exact/brute-force) and insert results.
+    # use_brute_force=TRUE bypasses the IVF index, which produces poor results when the
+    # per-portfolio subset is small relative to the full embeddings table. Exact search is
+    # safe here because portfolio size is at most a few thousand items, and the keyword set
+    # is bounded by min_monthly_searches (≤100K unique keywords per BQ VECTOR_SEARCH limit).
     run_bq(f"""
         INSERT INTO {_t(T_GAP_ANALYSIS)}
           (analysis_id, created_at, keyword_text, keyword_intent,
@@ -251,7 +251,8 @@ def run_gap_analysis_pipeline(
             'embedding',
             (SELECT keyword_text, intent_string, embedding FROM {_t(tmp_kw_emb)}),
             top_k => 3,
-            distance_type => 'COSINE'
+            distance_type => 'COSINE',
+            use_brute_force => TRUE
           )
           INNER JOIN {_t(T_PORTFOLIO_ITEMS_V2)} pi
             ON base.item_text = pi.item_text AND base.portfolio_id = pi.portfolio_id
