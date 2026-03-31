@@ -478,36 +478,26 @@ export default function GapAnalysisDetailPage() {
               </div>
             )}
 
-            {/* Min searches */}
+            {/* Min searches — wrapped in a form so the browser shows its native
+                constraint-validation tooltip when the value is below the min */}
             {(() => {
               const analysisMinSearches = analysis?.min_monthly_searches ?? 0
-              const inputVal = parseInt(minSearchesInput, 10)
-              const belowThreshold = analysisMinSearches > 0 && !isNaN(inputVal) && inputVal < analysisMinSearches
               return (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Min. Monthly Searches
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    className={`w-28 px-3 py-1.5 border rounded-md text-sm focus:outline-none ${
-                      belowThreshold
-                        ? 'border-amber-400 bg-amber-50 focus:ring-amber-400 focus:border-amber-400'
-                        : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
-                    }`}
-                    value={minSearchesInput}
-                    onChange={(e) => setMinSearchesInput(e.target.value)}
-                    onBlur={handleMinSearchesBlur}
-                    onKeyDown={(e) => e.key === 'Enter' && handleMinSearchesBlur()}
-                  />
-                  {belowThreshold ? (
-                    <p className="text-xs text-amber-600 mt-0.5">
-                      ⚠ Below generation threshold ({analysisMinSearches.toLocaleString()})
-                    </p>
-                  ) : (
-                    <p className="text-xs text-gray-400 mt-0.5">Applied client-side</p>
-                  )}
+                  <form onSubmit={(e) => { e.preventDefault(); handleMinSearchesBlur() }}>
+                    <input
+                      type="number"
+                      min={analysisMinSearches > 0 ? analysisMinSearches : 0}
+                      className="w-28 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                      value={minSearchesInput}
+                      onChange={(e) => setMinSearchesInput(e.target.value)}
+                      onBlur={(e) => e.target.form.requestSubmit()}
+                    />
+                  </form>
+                  <p className="text-xs text-gray-400 mt-0.5">Applied client-side</p>
                 </div>
               )
             })()}
