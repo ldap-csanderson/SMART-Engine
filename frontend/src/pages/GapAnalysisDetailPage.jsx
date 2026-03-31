@@ -123,6 +123,12 @@ export default function GapAnalysisDetailPage() {
         const analysisData = await analysisRes.json()
         setAnalysis(analysisData)
 
+        // Init min searches input from the threshold used to generate the analysis
+        if (analysisData.min_monthly_searches != null) {
+          setMinSearches(analysisData.min_monthly_searches)
+          setMinSearchesInput(String(analysisData.min_monthly_searches))
+        }
+
         // Extract portfolio snapshot from analysis
         if (analysisData.portfolio_snapshot) {
           setPortfolioSnapshot(analysisData.portfolio_snapshot)
@@ -374,6 +380,12 @@ export default function GapAnalysisDetailPage() {
                 <span>{portfolioSnapshot.items?.length || 0} portfolio items ({portfolioSnapshot.name})</span>
               </>
             )}
+            {analysis.min_monthly_searches != null && (
+              <>
+                <span>·</span>
+                <span>{analysis.min_monthly_searches.toLocaleString()} min. monthly searches</span>
+              </>
+            )}
             {executions.length > 0 && (
               <>
                 <span>·</span>
@@ -467,21 +479,38 @@ export default function GapAnalysisDetailPage() {
             )}
 
             {/* Min searches */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">
-                Min. Monthly Searches
-              </label>
-              <input
-                type="number"
-                min="0"
-                className="w-28 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-                value={minSearchesInput}
-                onChange={(e) => setMinSearchesInput(e.target.value)}
-                onBlur={handleMinSearchesBlur}
-                onKeyDown={(e) => e.key === 'Enter' && handleMinSearchesBlur()}
-              />
-              <p className="text-xs text-gray-400 mt-0.5">Applied client-side</p>
-            </div>
+            {(() => {
+              const analysisMinSearches = analysis?.min_monthly_searches ?? 0
+              const inputVal = parseInt(minSearchesInput, 10)
+              const belowThreshold = analysisMinSearches > 0 && !isNaN(inputVal) && inputVal < analysisMinSearches
+              return (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Min. Monthly Searches
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    className={`w-28 px-3 py-1.5 border rounded-md text-sm focus:outline-none ${
+                      belowThreshold
+                        ? 'border-amber-400 bg-amber-50 focus:ring-amber-400 focus:border-amber-400'
+                        : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                    }`}
+                    value={minSearchesInput}
+                    onChange={(e) => setMinSearchesInput(e.target.value)}
+                    onBlur={handleMinSearchesBlur}
+                    onKeyDown={(e) => e.key === 'Enter' && handleMinSearchesBlur()}
+                  />
+                  {belowThreshold ? (
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      ⚠ Below generation threshold ({analysisMinSearches.toLocaleString()})
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-400 mt-0.5">Applied client-side</p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Highlight threshold */}
             <div>

@@ -205,6 +205,12 @@ export default function GapAnalysesPage() {
                       </span>
                       <span>·</span>
                       <span>{(a.portfolio_snapshot?.items?.length ?? 0).toLocaleString()} portfolio items</span>
+                      {a.min_monthly_searches != null && (
+                        <>
+                          <span>·</span>
+                          <span>{a.min_monthly_searches.toLocaleString()} min. monthly searches</span>
+                        </>
+                      )}
                       {executionsMap[a.analysis_id]?.length > 0 && (
                         <>
                           <span>·</span>

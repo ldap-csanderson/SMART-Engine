@@ -88,6 +88,7 @@ class GapAnalysis(BaseModel):
     status: str
     created_at: str
     total_keywords_analyzed: int
+    min_monthly_searches: Optional[int] = None
     error_message: Optional[str] = None
 
 
@@ -311,6 +312,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         status=doc["status"],
         created_at=ts_to_str(doc["created_at"]),
         total_keywords_analyzed=doc["total_keywords_analyzed"],
+        min_monthly_searches=doc.get("min_monthly_searches"),
     )
 
 
@@ -388,6 +390,7 @@ def list_gap_analyses(report_id: Optional[str] = None, status: Optional[str] = N
                 status=doc_status,
                 created_at=ts_to_str(d["created_at"]),
                 total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
+                min_monthly_searches=d.get("min_monthly_searches"),
                 error_message=d.get("error_message"),
             ))
         return GapAnalysisListResponse(analyses=analyses, total_count=len(analyses))
@@ -414,6 +417,7 @@ def get_gap_analysis(analysis_id: str):
         status=d["status"],
         created_at=ts_to_str(d["created_at"]),
         total_keywords_analyzed=d.get("total_keywords_analyzed", 0),
+        min_monthly_searches=d.get("min_monthly_searches"),
         error_message=d.get("error_message"),
     )
 
