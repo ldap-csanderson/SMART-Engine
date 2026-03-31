@@ -670,6 +670,7 @@ export default function GapAnalysisDetailPage() {
         <RunFiltersModal
           isOpen={showRunFiltersModal}
           onClose={() => setShowRunFiltersModal(false)}
+          keywordCount={analysis?.total_keywords_analyzed ?? 0}
           onSubmit={async () => {
             setShowRunFiltersModal(false)
             // Immediately fetch updated executions so polling starts
