@@ -77,8 +77,8 @@ def create_models_if_not_exist():
 # ---------------------------------------------------------------------------
 
 _INTENT_JSON_SUFFIX = (
-    r"\n\nReturn ONLY raw JSON (no markdown, no code blocks). "
-    r'JSON: {\"intent_string\": \"I am [Persona] looking for [Specific Need]\"}'
+    r"\n\nReturn ONLY raw JSON. Do not return this example. "
+    r'Example: {\"intent_string\": \"I am a consumer shopping for the best laptops\"}'
 )
 
 _PARSE_INTENT = r"""JSON_VALUE(
