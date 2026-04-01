@@ -1,7 +1,7 @@
 """BigQuery ML helpers: model management and gap analysis pipeline."""
 import hashlib
 from db import (
-    bq_client, PROJECT_ID, DATASET_ID, CONNECTION_ID,
+    bq_client, db as firestore_db, PROJECT_ID, DATASET_ID, CONNECTION_ID,
     MODEL_GEMINI, MODEL_EMBEDDINGS,
     T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, 
     T_PORTFOLIO_ITEMS_V2, T_PORTFOLIO_EMBEDDINGS_V2,
@@ -45,6 +45,55 @@ def run_bq_scalar(sql: str) -> int:
     job = bq_client.query(sql)
     rows = list(job.result())
     return rows[0][0] if rows else 0
+
+
+# ---------------------------------------------------------------------------
+# Portfolio sync: Firestore → BQ (runtime, on-demand)
+# ---------------------------------------------------------------------------
+
+def _sync_portfolio_items(portfolio_id: str) -> int:
+    """
+    Read portfolio items from Firestore and upsert them into portfolio_items_v2.
+    Firestore is the source of truth; BQ is a runtime cache.
+    Returns the number of items synced.
+    """
+    if not firestore_db:
+        raise RuntimeError("Firestore client not available")
+
+    doc = firestore_db.collection("portfolios").document(portfolio_id).get()
+    if not doc.exists:
+        raise ValueError(f"Portfolio {portfolio_id} not found in Firestore")
+
+    items = doc.to_dict().get("items", [])
+    if not items:
+        raise ValueError(f"Portfolio {portfolio_id} has no items")
+
+    print(f"📋 Syncing {len(items)} portfolio items to BQ (portfolio_id={portfolio_id})")
+
+    # Delete existing rows for this portfolio, then re-insert from Firestore
+    bq_client.query(
+        f"DELETE FROM {_t(T_PORTFOLIO_ITEMS_V2)} WHERE portfolio_id = '{portfolio_id}'"
+    ).result()
+
+    # BQ INSERT VALUES has a limit of ~1MB per query; batch in chunks of 500
+    chunk_size = 500
+    total_inserted = 0
+    for i in range(0, len(items), chunk_size):
+        chunk = items[i:i + chunk_size]
+        values = ", ".join(
+            f"('{portfolio_id}', '{_sq(item)}', CURRENT_TIMESTAMP())"
+            for item in chunk
+            if item and item.strip()
+        )
+        if values:
+            bq_client.query(
+                f"INSERT INTO {_t(T_PORTFOLIO_ITEMS_V2)} "
+                f"(portfolio_id, item_text, added_at) VALUES {values}"
+            ).result()
+            total_inserted += len(chunk)
+
+    print(f"✅ Synced {total_inserted} portfolio items to BQ (portfolio_id={portfolio_id})")
+    return total_inserted
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +163,9 @@ def run_gap_analysis_pipeline(
     tmp_kw_intent = f"_tmp_{tid}_kw_intent"
     tmp_kw_emb = f"_tmp_{tid}_kw_emb"
     tmp_pi_intent = f"_tmp_{tid}_pi_intent"
+
+    # Step 0: sync portfolio items from Firestore → BQ (source of truth is Firestore)
+    _sync_portfolio_items(portfolio_id)
 
     # Step 1: keyword intent strings
     run_bq(f"""

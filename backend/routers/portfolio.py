@@ -10,6 +10,10 @@ from db import db, bq_client, ts_to_str, PROJECT_ID, DATASET_ID, T_PORTFOLIO_ITE
 
 router = APIRouter(prefix="/portfolios", tags=["portfolios"])
 
+# Note: portfolio items are synced to BigQuery on-demand at the start of each
+# gap analysis pipeline (_sync_portfolio_items in bq_ml.py). Firestore is the
+# source of truth; BQ is a runtime cache only.
+
 
 # ---------------------------------------------------------------------------
 # Models
@@ -48,40 +52,6 @@ class PortfolioListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _sync_to_bigquery(portfolio_id: str, items: List[str]):
-    """Sync portfolio items to BigQuery portfolio_items_v2 table."""
-    if not bq_client:
-        print("⚠️ BigQuery client not available — skipping sync")
-        return
-
-    try:
-        # Delete old items for this portfolio
-        bq_client.query(
-            f"DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS_V2}` "
-            f"WHERE portfolio_id = '{portfolio_id}'"
-        ).result()
-
-        # Insert new items (if any)
-        if items:
-            values = ", ".join(
-                f"('{portfolio_id}', '{item.replace(chr(39), chr(39)+chr(39))}', CURRENT_TIMESTAMP())"
-                for item in items
-            )
-            bq_client.query(
-                f"INSERT INTO `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS_V2}` "
-                f"(portfolio_id, item_text, added_at) VALUES {values}"
-            ).result()
-
-        print(f"✅ Synced {len(items)} portfolio items to BigQuery (portfolio_id={portfolio_id})")
-    except Exception as e:
-        print(f"⚠️ Failed to sync portfolio to BigQuery: {e}")
-        # Don't fail the request if BQ sync fails
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -98,7 +68,7 @@ def list_portfolios(limit: int = 100):
             .limit(limit)
         )
         docs = query.stream()
-        
+
         portfolios = []
         for doc in docs:
             d = doc.to_dict()
@@ -109,7 +79,7 @@ def list_portfolios(limit: int = 100):
                 created_at=ts_to_str(d["created_at"]),
                 updated_at=ts_to_str(d["updated_at"]),
             ))
-        
+
         return PortfolioListResponse(portfolios=portfolios, total_count=len(portfolios))
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -126,8 +96,8 @@ def create_portfolio(payload: PortfolioCreate):
         unique_items = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
 
         portfolio_id = str(uuid.uuid4())
-        
-        # Create Firestore document
+
+        # Create Firestore document (source of truth)
         db.collection("portfolios").document(portfolio_id).set({
             "portfolio_id": portfolio_id,
             "name": payload.name.strip(),
@@ -136,12 +106,9 @@ def create_portfolio(payload: PortfolioCreate):
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
 
-        # Sync to BigQuery
-        _sync_to_bigquery(portfolio_id, unique_items)
-
         # Re-fetch to get SERVER_TIMESTAMP values
         doc = db.collection("portfolios").document(portfolio_id).get().to_dict()
-        
+
         return Portfolio(
             portfolio_id=doc["portfolio_id"],
             name=doc["name"],
@@ -162,12 +129,12 @@ def get_portfolio(portfolio_id: str):
 
     try:
         doc = db.collection("portfolios").document(portfolio_id).get()
-        
+
         if not doc.exists:
             raise HTTPException(404, f"Portfolio {portfolio_id} not found")
-        
+
         d = doc.to_dict()
-        
+
         return Portfolio(
             portfolio_id=d["portfolio_id"],
             name=d["name"],
@@ -190,26 +157,23 @@ def update_portfolio(portfolio_id: str, payload: PortfolioUpdate):
 
     try:
         ref = db.collection("portfolios").document(portfolio_id)
-        
+
         if not ref.get().exists:
             raise HTTPException(404, f"Portfolio {portfolio_id} not found")
-        
+
         # Remove empty items and deduplicate
         unique_items = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
 
-        # Update Firestore
+        # Update Firestore (source of truth)
         ref.update({
             "name": payload.name.strip(),
             "items": unique_items,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
 
-        # Sync to BigQuery
-        _sync_to_bigquery(portfolio_id, unique_items)
-
         # Re-fetch to get updated timestamp
         doc = ref.get().to_dict()
-        
+
         return Portfolio(
             portfolio_id=doc["portfolio_id"],
             name=doc["name"],
@@ -232,23 +196,23 @@ def delete_portfolio(portfolio_id: str):
 
     try:
         ref = db.collection("portfolios").document(portfolio_id)
-        
+
         if not ref.get().exists:
             raise HTTPException(404, f"Portfolio {portfolio_id} not found")
 
         # Delete from Firestore
         ref.delete()
 
-        # Delete from BigQuery (best effort)
+        # Clean up BQ cache rows (best effort)
         if bq_client:
             try:
                 bq_client.query(
                     f"DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{T_PORTFOLIO_ITEMS_V2}` "
                     f"WHERE portfolio_id = '{portfolio_id}'"
                 ).result()
-                print(f"✅ Deleted portfolio items from BigQuery (portfolio_id={portfolio_id})")
+                print(f"✅ Deleted portfolio items from BigQuery cache (portfolio_id={portfolio_id})")
             except Exception as e:
-                print(f"⚠️ Could not delete BigQuery rows for portfolio {portfolio_id}: {e}")
+                print(f"⚠️ Could not delete BigQuery cache rows for portfolio {portfolio_id}: {e}")
 
         return {"message": f"Portfolio {portfolio_id} deleted", "portfolio_id": portfolio_id}
     except HTTPException:
