@@ -1,5 +1,6 @@
 """Filter execution endpoints — run LLM filters against a gap analysis."""
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -160,21 +161,32 @@ def create_filter_executions(
     created = []
     for fs in filter_snapshots:
         execution_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
         db.collection("filter_executions").document(execution_id).set({
             "execution_id": execution_id,
             "analysis_id": analysis_id,
             "filter_id": fs["filter_id"],
             "filter_snapshot": fs["snapshot"],
             "status": "processing",
-            "created_at": firestore.SERVER_TIMESTAMP,
+            "created_at": now,
             "total_evaluated": 0,
             "error_message": None,
         })
         background_tasks.add_task(
             _run_filter_background, execution_id, analysis_id, fs["snapshot"]
         )
-        doc = db.collection("filter_executions").document(execution_id).get().to_dict()
-        created.append(_doc_to_fe(doc))
+        # Build the response directly from known data — avoids SERVER_TIMESTAMP
+        # not being resolved yet on an immediate re-read.
+        created.append(FilterExecution(
+            execution_id=execution_id,
+            analysis_id=analysis_id,
+            filter_id=fs["filter_id"],
+            filter_snapshot=fs["snapshot"],
+            status="processing",
+            created_at=now.isoformat(),
+            total_evaluated=0,
+            error_message=None,
+        ))
 
     return created
 
