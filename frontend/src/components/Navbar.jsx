@@ -12,7 +12,7 @@ export default function Navbar() {
     <nav className="bg-white border-b border-gray-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center h-16 gap-8">
-            <span className="text-lg font-semibold text-gray-800 tracking-tight">Quinstreet</span>
+            <span className="text-lg font-semibold text-gray-800 tracking-tight">The Zebra</span>
           <div className="flex gap-1">
             {tabs.map((tab) => (
               <NavLink
