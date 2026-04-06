@@ -1,5 +1,6 @@
 """Filter execution endpoints — run LLM filters against a gap analysis."""
 import uuid
+import threading
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -78,6 +79,45 @@ def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot:
             })
         except Exception:
             pass
+
+
+def resume_stuck_filter_executions():
+    """
+    Called at startup. Finds any filter executions still in 'processing' status
+    (left over from a previous instance that was interrupted by a deploy or crash)
+    and re-runs them in background threads.
+    """
+    if not db or not bq_client:
+        print("⚠️ Skipping filter execution resume — Firestore or BigQuery not initialized")
+        return
+
+    try:
+        stuck = (
+            db.collection("filter_executions")
+            .where("status", "==", "processing")
+            .stream()
+        )
+        resumed = 0
+        for doc in stuck:
+            d = doc.to_dict()
+            execution_id = d["execution_id"]
+            analysis_id = d["analysis_id"]
+            filter_snapshot = d.get("filter_snapshot", {})
+            label = filter_snapshot.get("label", execution_id)
+            print(f"🔁 Resuming stuck filter execution {execution_id} (label={label})")
+            threading.Thread(
+                target=_run_filter_background,
+                args=(execution_id, analysis_id, filter_snapshot),
+                daemon=True,
+            ).start()
+            resumed += 1
+
+        if resumed:
+            print(f"🔁 Resumed {resumed} stuck filter execution(s)")
+        else:
+            print("✅ No stuck filter executions found")
+    except Exception as e:
+        print(f"⚠️ Error checking for stuck filter executions: {e}")
 
 
 # ---------------------------------------------------------------------------

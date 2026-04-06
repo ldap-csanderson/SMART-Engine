@@ -1,5 +1,6 @@
 """Main FastAPI application."""
 import os
+import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -10,14 +11,16 @@ from db import ga_client, bq_client, db, config
 from bq_ml import create_models_if_not_exist
 from routers.settings import _ensure_defaults
 from routers import keyword_reports, filters, portfolio, gap_analysis, settings, filter_executions
+from routers.filter_executions import resume_stuck_filter_executions
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Run BQ startup tasks in background threads so startup doesn't block
-    import threading
     threading.Thread(target=create_models_if_not_exist, daemon=True).start()
     _ensure_defaults()
+    # Resume any filter executions that were interrupted by a previous deploy/crash
+    threading.Thread(target=resume_stuck_filter_executions, daemon=True).start()
     yield
 
 
