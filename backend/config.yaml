@@ -28,6 +28,7 @@ bigquery:
     gemini_flash: "gemini-flash"
     text_embeddings: "text-embeddings"
   default_page_size: 100
+  filter_batch_size: 500
 
 # Google Ads Settings
 google_ads:

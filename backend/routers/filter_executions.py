@@ -59,11 +59,22 @@ def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot:
     """Background task: run a single filter pipeline and update Firestore."""
     label = filter_snapshot.get("label", execution_id)
     print(f"🔄 Filter execution {execution_id} started (label={label})")
+
+    def on_batch_complete(rows_done: int):
+        """Update Firestore with incremental progress after each batch."""
+        try:
+            db.collection("filter_executions").document(execution_id).update({
+                "total_evaluated": rows_done,
+            })
+        except Exception as e:
+            print(f"⚠️ Progress update failed for {execution_id}: {e}")
+
     try:
         count = run_filter_pipeline(
             execution_id=execution_id,
             analysis_id=analysis_id,
             filter_snapshot=filter_snapshot,
+            on_batch_complete=on_batch_complete,
         )
         db.collection("filter_executions").document(execution_id).update({
             "status": "completed",
