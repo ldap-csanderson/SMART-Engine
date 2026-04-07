@@ -31,6 +31,7 @@ MODEL_EMBEDDINGS = config["bigquery"]["models"]["text_embeddings"]
 CUSTOMER_ID = config["google_ads"]["customer_id"]
 MAX_RETRIES = config["api"]["max_retries"]
 RETRY_DELAY = config["api"]["retry_delay_seconds"]
+FILTER_BATCH_SIZE = config["bigquery"].get("filter_batch_size", 500)
 
 # ---------------------------------------------------------------------------
 # Client initialization

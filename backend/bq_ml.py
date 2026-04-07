@@ -6,6 +6,7 @@ from db import (
     T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, 
     T_PORTFOLIO_ITEMS_V2, T_PORTFOLIO_EMBEDDINGS_V2,
     T_GAP_ANALYSIS, T_FILTER_RESULTS,
+    FILTER_BATCH_SIZE,
 )
 
 # ---------------------------------------------------------------------------
@@ -340,11 +341,16 @@ def run_filter_pipeline(
     execution_id: str,
     analysis_id: str,
     filter_snapshot: dict,
+    on_batch_complete=None,
 ) -> int:
     """
     Run LLM-based boolean filter over all keywords in a gap analysis.
 
+    Processes keywords in batches of FILTER_BATCH_SIZE to stay within
+    BigQuery on-demand pricing CPU/bytes ratio limits.
+
     filter_snapshot must have: label (str), text (str)
+    on_batch_complete: optional callable(rows_done: int) for progress updates
 
     Returns the number of rows inserted into filter_results.
     """
@@ -377,42 +383,89 @@ def run_filter_pipeline(
             f"            )"
         )
 
-    run_bq(f"""
-        INSERT INTO {_t(T_FILTER_RESULTS)}
-          (execution_id, analysis_id, keyword_text, label, result, confidence, created_at)
-        WITH llm AS (
-          SELECT * FROM ML.GENERATE_TEXT(
-            MODEL {_m(MODEL_GEMINI)},
-            (
-              SELECT DISTINCT
-                keyword_text,
-                {prompt_concat} AS prompt
-              FROM {_t(T_GAP_ANALYSIS)}
-              WHERE analysis_id = '{analysis_id}'
-            ),
-            {_FILTER_LLM_OPTS}
-          )
-        ),
-        parsed AS (
-          SELECT
-            keyword_text,
-            CAST({_parse(label)} AS BOOL) AS result,
-            {_parse('confidence')} AS confidence
-          FROM llm
-        )
-        SELECT
-          '{execution_id}' AS execution_id,
-          '{analysis_id}' AS analysis_id,
-          keyword_text,
-          '{label_sql}' AS label,
-          result,
-          confidence,
-          CURRENT_TIMESTAMP() AS created_at
-        FROM parsed
-    """, f"Filter pipeline: {label} on analysis {analysis_id}")
+    # Count total distinct keywords for this analysis
+    total_keywords = run_bq_scalar(f"""
+        SELECT COUNT(DISTINCT keyword_text)
+        FROM {_t(T_GAP_ANALYSIS)}
+        WHERE analysis_id = '{analysis_id}'
+    """)
+    print(f"🔢 Filter '{label}': {total_keywords} keywords to process in batches of {FILTER_BATCH_SIZE}")
 
+    if total_keywords == 0:
+        print(f"⚠️ No keywords found for analysis {analysis_id} — nothing to filter")
+        return 0
+
+    # Process in batches using ROW_NUMBER() for stable pagination.
+    # Each batch stays well under the BQ on-demand CPU/bytes ratio limit.
+    total_inserted = 0
+    num_batches = (total_keywords + FILTER_BATCH_SIZE - 1) // FILTER_BATCH_SIZE
+
+    for batch_num in range(num_batches):
+        offset = batch_num * FILTER_BATCH_SIZE
+        limit = offset + FILTER_BATCH_SIZE
+        print(f"  Batch {batch_num + 1}/{num_batches}: rows {offset + 1}–{min(limit, total_keywords)}")
+
+        run_bq(f"""
+            INSERT INTO {_t(T_FILTER_RESULTS)}
+              (execution_id, analysis_id, keyword_text, label, result, confidence, created_at)
+            WITH ranked AS (
+              SELECT
+                keyword_text,
+                ROW_NUMBER() OVER (ORDER BY keyword_text) AS rn
+              FROM (
+                SELECT DISTINCT keyword_text
+                FROM {_t(T_GAP_ANALYSIS)}
+                WHERE analysis_id = '{analysis_id}'
+              )
+            ),
+            batch AS (
+              SELECT keyword_text
+              FROM ranked
+              WHERE rn > {offset} AND rn <= {limit}
+            ),
+            llm AS (
+              SELECT * FROM ML.GENERATE_TEXT(
+                MODEL {_m(MODEL_GEMINI)},
+                (
+                  SELECT
+                    keyword_text,
+                    {prompt_concat} AS prompt
+                  FROM batch
+                ),
+                {_FILTER_LLM_OPTS}
+              )
+            ),
+            parsed AS (
+              SELECT
+                keyword_text,
+                CAST({_parse(label)} AS BOOL) AS result,
+                {_parse('confidence')} AS confidence
+              FROM llm
+            )
+            SELECT
+              '{execution_id}' AS execution_id,
+              '{analysis_id}' AS analysis_id,
+              keyword_text,
+              '{label_sql}' AS label,
+              result,
+              confidence,
+              CURRENT_TIMESTAMP() AS created_at
+            FROM parsed
+        """, f"Filter '{label}' batch {batch_num + 1}/{num_batches}")
+
+        total_inserted += min(FILTER_BATCH_SIZE, total_keywords - offset)
+
+        # Notify caller of progress (used to update Firestore total_evaluated)
+        if on_batch_complete:
+            try:
+                on_batch_complete(total_inserted)
+            except Exception as e:
+                print(f"⚠️ on_batch_complete callback error: {e}")
+
+    # Final count from BQ (source of truth)
     count = run_bq_scalar(f"""
         SELECT COUNT(*) FROM {_t(T_FILTER_RESULTS)}
         WHERE execution_id = '{execution_id}'
     """)
+    print(f"✅ Filter '{label}' complete: {count} rows inserted")
     return count
