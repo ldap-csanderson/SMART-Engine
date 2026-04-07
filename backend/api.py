@@ -16,9 +16,9 @@ from routers.filter_executions import resume_stuck_filter_executions
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run BQ startup tasks in background threads so startup doesn't block
+    # Run all startup tasks in background threads so startup doesn't block or crash
     threading.Thread(target=create_models_if_not_exist, daemon=True).start()
-    _ensure_defaults()
+    threading.Thread(target=_ensure_defaults, daemon=True).start()
     # Resume any filter executions that were interrupted by a previous deploy/crash
     threading.Thread(target=resume_stuck_filter_executions, daemon=True).start()
     yield

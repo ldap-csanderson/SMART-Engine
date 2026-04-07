@@ -25,14 +25,17 @@ def _ensure_defaults():
     """Write default prompts to Firestore if not already present."""
     if not db:
         return
-    ref = db.collection("settings").document("prompts")
-    if not ref.get().exists:
-        ref.set({
-            "keyword_intent_prompt": _DEFAULT_KEYWORD_PROMPT,
-            "portfolio_intent_prompt": _DEFAULT_PORTFOLIO_PROMPT,
-            "updated_at": firestore.SERVER_TIMESTAMP,
-        })
-        print("✅ Initialized default prompts in Firestore")
+    try:
+        ref = db.collection("settings").document("prompts")
+        if not ref.get().exists:
+            ref.set({
+                "keyword_intent_prompt": _DEFAULT_KEYWORD_PROMPT,
+                "portfolio_intent_prompt": _DEFAULT_PORTFOLIO_PROMPT,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            })
+            print("✅ Initialized default prompts in Firestore")
+    except Exception as e:
+        print(f"⚠️ Could not initialize default prompts in Firestore: {e}")
 
 
 @router.get("/prompts", response_model=Prompts)
