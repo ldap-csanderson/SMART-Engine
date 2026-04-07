@@ -2,7 +2,7 @@
 set -e
 
 # Configuration — edit these for each deployment target
-PROJECT_ID="gap-analysis-nlf"
+PROJECT_ID="people-gandalf"
 REGION="us-central1"
 REPO="app"
 IMAGE_NAME="gap-analysis"
