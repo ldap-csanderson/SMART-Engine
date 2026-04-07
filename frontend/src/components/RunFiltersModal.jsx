@@ -27,9 +27,10 @@ export default function RunFiltersModal({
       .finally(() => setLoading(false))
   }, [isOpen])
 
-  // Filters already run on this analysis (by label + name)
-  const usedLabels = new Set(existingExecutions.map((e) => e.filter_snapshot?.label).filter(Boolean))
-  const usedNames  = new Set(existingExecutions.map((e) => e.filter_snapshot?.name).filter(Boolean))
+  // Filters already run on this analysis (by label + name) — only block processing/completed, not failed
+  const activeExecutions = existingExecutions.filter((e) => e.status === 'processing' || e.status === 'completed')
+  const usedLabels = new Set(activeExecutions.map((e) => e.filter_snapshot?.label).filter(Boolean))
+  const usedNames  = new Set(activeExecutions.map((e) => e.filter_snapshot?.name).filter(Boolean))
   const availableFilters = allFilters.filter(
     (f) => !usedLabels.has(f.label) && !usedNames.has(f.name)
   )
