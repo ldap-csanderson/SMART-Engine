@@ -339,6 +339,7 @@ export default function GapAnalysisDetailPage() {
   }
 
   const completedExecs = executions.filter((e) => e.status === 'completed')
+  const failedExecs = executions.filter((e) => e.status === 'failed')
 
   if (pageLoading) {
     return (
@@ -454,6 +455,21 @@ export default function GapAnalysisDetailPage() {
                       onDelete={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
                     />
                   ))}
+                  {failedExecs.map((e) => (
+                    <div key={e.execution_id} className="flex items-center gap-2">
+                      <span className="text-sm text-red-600 font-medium min-w-[100px] truncate" title={e.filter_snapshot.name}>
+                        {e.filter_snapshot.name}
+                      </span>
+                      <span className="inline-flex px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700">failed</span>
+                      <button
+                        onClick={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
+                        className="ml-1 text-red-500 hover:text-red-700 text-xs underline"
+                        title="Delete this failed filter so you can re-run it"
+                      >
+                        delete
+                      </button>
+                    </div>
+                  ))}
                 </div>
                 <button
                   onClick={() => setShowRunFiltersModal(true)}
@@ -471,11 +487,32 @@ export default function GapAnalysisDetailPage() {
             {completedExecs.length === 0 && (
               <div className="flex-1 min-w-[260px]">
                 <p className="text-sm font-semibold text-gray-700 mb-2">Filters</p>
-                {executions.filter((e) => e.status === 'processing').length > 0 ? (
+                {executions.filter((e) => e.status === 'processing').length > 0 && (
                   <p className="text-xs text-blue-500 mb-2">
                     Processing: {executions.filter((e) => e.status === 'processing').map((e) => e.filter_snapshot.name).join(', ')}
                   </p>
-                ) : (
+                )}
+                {failedExecs.length > 0 && (
+                  <div className="space-y-1 mb-2">
+                    {failedExecs.map((e) => (
+                      <div key={e.execution_id} className="flex items-center gap-2">
+                        <span className="text-sm text-red-600 font-medium min-w-[100px] truncate" title={e.filter_snapshot.name}>
+                          {e.filter_snapshot.name}
+                        </span>
+                        <span className="inline-flex px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700">failed</span>
+                        <button
+                          onClick={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
+                          className="ml-1 text-red-500 hover:text-red-700 text-xs underline"
+                          title="Delete this failed filter so you can re-run it"
+                        >
+                          delete
+                        </button>
+                      </div>
+                    ))}
+                    <p className="text-xs text-gray-400 mt-1">Delete a failed filter to re-run it.</p>
+                  </div>
+                )}
+                {executions.length === 0 && (
                   <p className="text-sm text-gray-400 italic mb-2">No filters run yet.</p>
                 )}
                 <button
