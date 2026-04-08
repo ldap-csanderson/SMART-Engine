@@ -10,16 +10,9 @@ resource "google_firestore_database" "database" {
 
 # Enable Firestore API
 resource "google_project_service" "firestore" {
-  project = var.project_id
-  service = "firestore.googleapis.com"
+  project            = var.project_id
+  service            = "firestore.googleapis.com"
   disable_on_destroy = false
-}
-
-# Grant Firestore access to service account
-resource "google_project_iam_member" "firestore_user" {
-  project = var.project_id
-  role    = "roles/datastore.user"
-  member  = "serviceAccount:${google_service_account.keyword_planner.email}"
 }
 
 # Composite index: filter_executions — filter by analysis_id, ordered by created_at DESC
