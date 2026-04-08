@@ -1,24 +1,47 @@
-"""Settings endpoints — prompt configuration stored in Firestore."""
-from typing import Optional
+"""Settings endpoints — per-dataset-type prompt configuration stored in Firestore."""
+from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException
 from google.cloud import firestore
 from pydantic import BaseModel
 
 from db import db, ts_to_str
-from routers.gap_analysis import _DEFAULT_KEYWORD_PROMPT, _DEFAULT_PORTFOLIO_PROMPT
+from bq_ml import get_default_prompt_for_type
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
+DATASET_TYPES = [
+    "google_ads_keywords",
+    "google_ads_keyword_planner",
+    "google_ads_search_terms",
+    "google_ads_ad_copy",
+    "text_list",
+]
+
 
 class PromptsUpdate(BaseModel):
-    keyword_intent_prompt: Optional[str] = None
-    portfolio_intent_prompt: Optional[str] = None
+    # Per-type prompt overrides — any key can be omitted to keep existing value
+    google_ads_keywords_intent_prompt: Optional[str] = None
+    google_ads_keyword_planner_intent_prompt: Optional[str] = None
+    google_ads_search_terms_intent_prompt: Optional[str] = None
+    google_ads_ad_copy_intent_prompt: Optional[str] = None
+    text_list_intent_prompt: Optional[str] = None
 
 
 class Prompts(BaseModel):
-    keyword_intent_prompt: str
-    portfolio_intent_prompt: str
+    google_ads_keywords_intent_prompt: str
+    google_ads_keyword_planner_intent_prompt: str
+    google_ads_search_terms_intent_prompt: str
+    google_ads_ad_copy_intent_prompt: str
+    text_list_intent_prompt: str
     updated_at: Optional[str] = None
+
+
+def _prompt_key(dataset_type: str) -> str:
+    return f"{dataset_type}_intent_prompt"
+
+
+def _get_defaults() -> Dict[str, str]:
+    return {_prompt_key(t): get_default_prompt_for_type(t) for t in DATASET_TYPES}
 
 
 def _ensure_defaults():
@@ -28,33 +51,46 @@ def _ensure_defaults():
     try:
         ref = db.collection("settings").document("prompts")
         if not ref.get().exists:
-            ref.set({
-                "keyword_intent_prompt": _DEFAULT_KEYWORD_PROMPT,
-                "portfolio_intent_prompt": _DEFAULT_PORTFOLIO_PROMPT,
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
+            data = _get_defaults()
+            data["updated_at"] = firestore.SERVER_TIMESTAMP
+            ref.set(data)
             print("✅ Initialized default prompts in Firestore")
     except Exception as e:
         print(f"⚠️ Could not initialize default prompts in Firestore: {e}")
 
 
+def _build_prompts_response(d: dict) -> Prompts:
+    defaults = _get_defaults()
+    return Prompts(
+        google_ads_keywords_intent_prompt=d.get(
+            "google_ads_keywords_intent_prompt", defaults["google_ads_keywords_intent_prompt"]
+        ),
+        google_ads_keyword_planner_intent_prompt=d.get(
+            "google_ads_keyword_planner_intent_prompt", defaults["google_ads_keyword_planner_intent_prompt"]
+        ),
+        google_ads_search_terms_intent_prompt=d.get(
+            "google_ads_search_terms_intent_prompt", defaults["google_ads_search_terms_intent_prompt"]
+        ),
+        google_ads_ad_copy_intent_prompt=d.get(
+            "google_ads_ad_copy_intent_prompt", defaults["google_ads_ad_copy_intent_prompt"]
+        ),
+        text_list_intent_prompt=d.get(
+            "text_list_intent_prompt", defaults["text_list_intent_prompt"]
+        ),
+        updated_at=ts_to_str(d.get("updated_at")),
+    )
+
+
 @router.get("/prompts", response_model=Prompts)
 def get_prompts():
     if not db:
-        return Prompts(
-            keyword_intent_prompt=_DEFAULT_KEYWORD_PROMPT,
-            portfolio_intent_prompt=_DEFAULT_PORTFOLIO_PROMPT,
-        )
+        return _build_prompts_response({})
     doc = db.collection("settings").document("prompts").get()
     if not doc.exists:
         _ensure_defaults()
         doc = db.collection("settings").document("prompts").get()
-    d = doc.to_dict()
-    return Prompts(
-        keyword_intent_prompt=d.get("keyword_intent_prompt", _DEFAULT_KEYWORD_PROMPT),
-        portfolio_intent_prompt=d.get("portfolio_intent_prompt", _DEFAULT_PORTFOLIO_PROMPT),
-        updated_at=ts_to_str(d.get("updated_at")),
-    )
+    d = doc.to_dict() if doc.exists else {}
+    return _build_prompts_response(d)
 
 
 @router.put("/prompts", response_model=Prompts)
@@ -63,24 +99,17 @@ def update_prompts(payload: PromptsUpdate):
         raise HTTPException(503, "Firestore not initialized")
     ref = db.collection("settings").document("prompts")
     existing = ref.get()
-    current = existing.to_dict() if existing.exists else {}
 
-    updates = {"updated_at": firestore.SERVER_TIMESTAMP}
-    if payload.keyword_intent_prompt is not None:
-        updates["keyword_intent_prompt"] = payload.keyword_intent_prompt
-    if payload.portfolio_intent_prompt is not None:
-        updates["portfolio_intent_prompt"] = payload.portfolio_intent_prompt
+    updates: Dict = {"updated_at": firestore.SERVER_TIMESTAMP}
+    for field, value in payload.model_dump(exclude_none=True).items():
+        updates[field] = value
 
     if existing.exists:
         ref.update(updates)
     else:
-        updates.setdefault("keyword_intent_prompt", _DEFAULT_KEYWORD_PROMPT)
-        updates.setdefault("portfolio_intent_prompt", _DEFAULT_PORTFOLIO_PROMPT)
-        ref.set(updates)
+        data = _get_defaults()
+        data.update(updates)
+        ref.set(data)
 
     d = ref.get().to_dict()
-    return Prompts(
-        keyword_intent_prompt=d["keyword_intent_prompt"],
-        portfolio_intent_prompt=d["portfolio_intent_prompt"],
-        updated_at=ts_to_str(d.get("updated_at")),
-    )
+    return _build_prompts_response(d)
