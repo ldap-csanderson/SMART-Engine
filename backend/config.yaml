@@ -16,18 +16,10 @@ bigquery:
   dataset: "smart_engine_data"
   connection: "us-central1.vertex-ai-connection"
   tables:
-    # v3 tables
     dataset_items: "dataset_items"
     dataset_embeddings: "dataset_embeddings"
     gap_analysis_results: "gap_analysis_results"
     filter_results: "filter_results"
-    # legacy v2 tables (kept for reference, not used in v3 pipeline)
-    runs: "keyword_runs"
-    results: "keyword_results"
-    portfolio_items: "portfolio_items"
-    portfolio_embeddings: "portfolio_embeddings"
-    portfolio_items_v2: "portfolio_items_v2"
-    portfolio_embeddings_v2: "portfolio_embeddings_v2"
   models:
     gemini_flash: "gemini-flash"
     text_embeddings: "text-embeddings"

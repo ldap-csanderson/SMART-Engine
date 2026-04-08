@@ -19,14 +19,6 @@ T_DATASET_EMBEDDINGS = config["bigquery"]["tables"]["dataset_embeddings"]
 T_GAP_ANALYSIS = config["bigquery"]["tables"]["gap_analysis_results"]
 T_FILTER_RESULTS = config["bigquery"]["tables"]["filter_results"]
 
-# Legacy v2 table names (kept for reference, not used in v3 pipeline)
-T_RUNS = config["bigquery"]["tables"]["runs"]
-T_RESULTS = config["bigquery"]["tables"]["results"]
-T_PORTFOLIO_ITEMS = config["bigquery"]["tables"]["portfolio_items"]
-T_PORTFOLIO_EMBEDDINGS = config["bigquery"]["tables"]["portfolio_embeddings"]
-T_PORTFOLIO_ITEMS_V2 = config["bigquery"]["tables"]["portfolio_items_v2"]
-T_PORTFOLIO_EMBEDDINGS_V2 = config["bigquery"]["tables"]["portfolio_embeddings_v2"]
-
 # Model names
 MODEL_GEMINI = config["bigquery"]["models"]["gemini_flash"]
 MODEL_EMBEDDINGS = config["bigquery"]["models"]["text_embeddings"]

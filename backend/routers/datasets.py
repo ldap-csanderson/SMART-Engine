@@ -566,6 +566,10 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
     dataset_id = str(uuid.uuid4())
     source_config = payload.source_config or {}
 
+    # Inject customer_id into source_config for all Google Ads types (spec §1.4)
+    if payload.type in GOOGLE_ADS_TYPES:
+        source_config = {"customer_id": CUSTOMER_ID, **source_config}
+
     # For text_list, store items directly in Firestore (same as old Portfolio behavior)
     items_to_store = None
     if payload.type == "text_list":
