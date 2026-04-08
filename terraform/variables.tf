@@ -1,7 +1,7 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
-  default     = "gap-analysis-nlf"
+  default     = "csanderson-experimental-443821"
 }
 
 variable "region" {
@@ -13,17 +13,17 @@ variable "region" {
 variable "dataset_id" {
   description = "BigQuery dataset ID"
   type        = string
-  default     = "keyword_planner_data"
+  default     = "smart_engine_data"
 }
 
 variable "service_account_name" {
-  description = "Service account name for keyword planner"
+  description = "Service account name"
   type        = string
-  default     = "keyword-planner-sa"
+  default     = "smart-engine-sa"
 }
 
 variable "app_image" {
   description = "Application Docker image URL (includes both frontend and backend)"
   type        = string
-  default     = "us-central1-docker.pkg.dev/gap-analysis-nlf/app/gap-analysis:latest"
+  default     = "us-central1-docker.pkg.dev/csanderson-experimental-443821/app/smart-engine:latest"
 }

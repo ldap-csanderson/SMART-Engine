@@ -1,13 +1,13 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Navbar from './components/Navbar'
-import KeywordReportsPage from './pages/KeywordReportsPage'
-import ReportDetailPage from './pages/ReportDetailPage'
+import DatasetsPage from './pages/DatasetsPage'
+import DatasetDetailPage from './pages/DatasetDetailPage'
+import DatasetGroupsPage from './pages/DatasetGroupsPage'
+import DatasetGroupDetailPage from './pages/DatasetGroupDetailPage'
 import GapAnalysesPage from './pages/GapAnalysesPage'
 import GapAnalysisDetailPage from './pages/GapAnalysisDetailPage'
 import FiltersPage from './pages/FiltersPage'
 import FilterDetailPage from './pages/FilterDetailPage'
-import PortfoliosPage from './pages/PortfoliosPage'
-import PortfolioDetailPage from './pages/PortfolioDetailPage'
 
 function App() {
   return (
@@ -15,15 +15,15 @@ function App() {
       <Navbar />
       <main className="flex-1">
         <Routes>
-          <Route path="/" element={<Navigate to="/keyword-reports" replace />} />
-          <Route path="/keyword-reports" element={<KeywordReportsPage />} />
-          <Route path="/keyword-reports/:reportId" element={<ReportDetailPage />} />
+          <Route path="/" element={<Navigate to="/datasets" replace />} />
+          <Route path="/datasets" element={<DatasetsPage />} />
+          <Route path="/datasets/:datasetId" element={<DatasetDetailPage />} />
+          <Route path="/dataset-groups" element={<DatasetGroupsPage />} />
+          <Route path="/dataset-groups/:groupId" element={<DatasetGroupDetailPage />} />
           <Route path="/gap-analyses" element={<GapAnalysesPage />} />
           <Route path="/gap-analyses/:analysisId" element={<GapAnalysisDetailPage />} />
           <Route path="/filters" element={<FiltersPage />} />
           <Route path="/filters/:filterId" element={<FilterDetailPage />} />
-          <Route path="/portfolios" element={<PortfoliosPage />} />
-          <Route path="/portfolios/:id" element={<PortfolioDetailPage />} />
         </Routes>
       </main>
     </div>

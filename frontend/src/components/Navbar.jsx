@@ -1,37 +1,33 @@
-import { NavLink } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
+
+const navItems = [
+  { path: '/datasets', label: 'Datasets' },
+  { path: '/dataset-groups', label: 'Dataset Groups' },
+  { path: '/gap-analyses', label: 'Gap Analyses' },
+  { path: '/filters', label: 'Filters' },
+]
 
 export default function Navbar() {
-  const tabs = [
-    { label: 'Keyword Reports', to: '/keyword-reports' },
-    { label: 'Portfolios', to: '/portfolios' },
-    { label: 'Filters', to: '/filters' },
-    { label: 'Gap Analyses', to: '/gap-analyses' },
-  ]
+  const location = useLocation()
 
   return (
-    <nav className="bg-white border-b border-gray-200 shadow-sm">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center h-16 gap-8">
-            <span class="text-3xl">🧙🏼‍♂️</span>
-          <div className="flex gap-1">
-            {tabs.map((tab) => (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                className={({ isActive }) =>
-                  `px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                  }`
-                }
-              >
-                {tab.label}
-              </NavLink>
-            ))}
-          </div>
-        </div>
-      </div>
+    <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
+      <Link to="/" className="font-bold text-lg text-indigo-600 mr-4">
+        SMART Engine
+      </Link>
+      {navItems.map(item => (
+        <Link
+          key={item.path}
+          to={item.path}
+          className={`text-sm font-medium transition-colors ${
+            location.pathname.startsWith(item.path)
+              ? 'text-indigo-600 border-b-2 border-indigo-600 pb-0.5'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          {item.label}
+        </Link>
+      ))}
     </nav>
   )
 }

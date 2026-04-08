@@ -13,15 +13,19 @@ DATASET_ID = config["bigquery"]["dataset"]
 REGION = config["gcp"]["region"]
 CONNECTION_ID = config["bigquery"]["connection"]
 
-# Table names
+# v3 table names
+T_DATASET_ITEMS = config["bigquery"]["tables"]["dataset_items"]
+T_DATASET_EMBEDDINGS = config["bigquery"]["tables"]["dataset_embeddings"]
+T_GAP_ANALYSIS = config["bigquery"]["tables"]["gap_analysis_results"]
+T_FILTER_RESULTS = config["bigquery"]["tables"]["filter_results"]
+
+# Legacy v2 table names (kept for reference, not used in v3 pipeline)
 T_RUNS = config["bigquery"]["tables"]["runs"]
 T_RESULTS = config["bigquery"]["tables"]["results"]
 T_PORTFOLIO_ITEMS = config["bigquery"]["tables"]["portfolio_items"]
 T_PORTFOLIO_EMBEDDINGS = config["bigquery"]["tables"]["portfolio_embeddings"]
 T_PORTFOLIO_ITEMS_V2 = config["bigquery"]["tables"]["portfolio_items_v2"]
 T_PORTFOLIO_EMBEDDINGS_V2 = config["bigquery"]["tables"]["portfolio_embeddings_v2"]
-T_GAP_ANALYSIS = config["bigquery"]["tables"]["gap_analysis_results"]
-T_FILTER_RESULTS = config["bigquery"]["tables"]["filter_results"]
 
 # Model names
 MODEL_GEMINI = config["bigquery"]["models"]["gemini_flash"]
@@ -32,6 +36,9 @@ CUSTOMER_ID = config["google_ads"]["customer_id"]
 MAX_RETRIES = config["api"]["max_retries"]
 RETRY_DELAY = config["api"]["retry_delay_seconds"]
 FILTER_BATCH_SIZE = config["bigquery"].get("filter_batch_size", 500)
+
+# Dataset types that have search volume enrichment data
+SEARCH_VOLUME_TYPES = {"google_ads_keywords", "google_ads_keyword_planner"}
 
 # ---------------------------------------------------------------------------
 # Client initialization

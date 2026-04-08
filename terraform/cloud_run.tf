@@ -8,9 +8,9 @@ resource "google_project_service" "cloudrun" {
 
 # Service account for the application
 resource "google_service_account" "app" {
-  account_id   = "gap-analysis-app"
-  display_name = "Gap Analysis Application Service Account"
-  description  = "Service account for the Gap Analysis Cloud Run service"
+  account_id   = "smart-engine-app"
+  display_name = "SMART Engine Application Service Account"
+  description  = "Service account for the SMART Engine Cloud Run service"
 }
 
 # Grant service account access to BigQuery
@@ -55,7 +55,7 @@ resource "google_project_iam_member" "app_bq_connection_user" {
 
 # Cloud Run service (serves both API and frontend)
 resource "google_cloud_run_v2_service" "app" {
-  name     = "gap-analysis"
+  name     = "smart-engine"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
   

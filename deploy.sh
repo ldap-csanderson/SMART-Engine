@@ -2,12 +2,12 @@
 set -e
 
 # Configuration
-PROJECT_ID="gap-analysis-nlf"
+PROJECT_ID="csanderson-experimental-443821"
 REGION="us-central1"
 REPO="app"
-IMAGE_NAME="gap-analysis"
+IMAGE_NAME="smart-engine"
 
-echo "🚀 Gap Analysis Deployment Script"
+echo "🚀 SMART Engine Deployment Script"
 echo "===================================="
 echo "Project: $PROJECT_ID"
 echo "Region: $REGION"

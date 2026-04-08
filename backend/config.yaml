@@ -1,29 +1,33 @@
 # Application Configuration
 app:
-  name: "Keyword Planner API"
-  version: "1.0.0"
+  name: "SMART Engine"
+  version: "3.0.0"
   host: "0.0.0.0"
   port: 8000
 
 # Google Cloud Platform Settings
 gcp:
-  project_id: "gap-analysis-nlf"
+  project_id: "csanderson-experimental-443821"
   region: "us-central1"
   credentials_path: "${GCP_SERVICE_ACCOUNT_KEY_PATH}"
 
 # BigQuery Settings
 bigquery:
-  dataset: "keyword_planner_data"
+  dataset: "smart_engine_data"
   connection: "us-central1.vertex-ai-connection"
   tables:
+    # v3 tables
+    dataset_items: "dataset_items"
+    dataset_embeddings: "dataset_embeddings"
+    gap_analysis_results: "gap_analysis_results"
+    filter_results: "filter_results"
+    # legacy v2 tables (kept for reference, not used in v3 pipeline)
     runs: "keyword_runs"
     results: "keyword_results"
     portfolio_items: "portfolio_items"
     portfolio_embeddings: "portfolio_embeddings"
     portfolio_items_v2: "portfolio_items_v2"
     portfolio_embeddings_v2: "portfolio_embeddings_v2"
-    gap_analysis_results: "gap_analysis_results"
-    filter_results: "filter_results"
   models:
     gemini_flash: "gemini-flash"
     text_embeddings: "text-embeddings"

@@ -1,4 +1,4 @@
-"""Main FastAPI application."""
+"""Main FastAPI application — SMART Engine v3."""
 import os
 import threading
 from pathlib import Path
@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from db import ga_client, bq_client, db, config
 from bq_ml import create_models_if_not_exist
 from routers.settings import _ensure_defaults
-from routers import keyword_reports, filters, portfolio, gap_analysis, settings, filter_executions
+from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions
 from routers.filter_executions import resume_stuck_filter_executions
 
 
@@ -24,12 +24,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Gap Analysis API", lifespan=lifespan)
+app = FastAPI(title="SMART Engine API", lifespan=lifespan)
 
 # Include API routers with /api prefix
-app.include_router(keyword_reports.router, prefix="/api")
+app.include_router(datasets.router, prefix="/api")
+app.include_router(dataset_groups.router, prefix="/api")
 app.include_router(filters.router, prefix="/api")
-app.include_router(portfolio.router, prefix="/api")
 app.include_router(gap_analysis.router, prefix="/api")
 app.include_router(filter_executions.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
@@ -50,19 +50,19 @@ static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     # Mount static assets (JS/CSS/images)
     app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
-    
+
     # Serve index.html for all other routes (SPA routing)
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         # Don't intercept API routes
         if full_path.startswith("api/"):
             return {"error": "Not found"}, 404
-        
+
         # Try to serve the file if it exists
         file_path = static_dir / full_path
         if file_path.is_file():
             return FileResponse(file_path)
-        
+
         # Otherwise serve index.html (SPA routing)
         return FileResponse(static_dir / "index.html")
 

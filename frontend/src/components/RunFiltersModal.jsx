@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import CostEstimateBox, { estimateFilterCost } from './CostEstimateBox'
+import API_BASE from '../config'
 
 export default function RunFiltersModal({
   isOpen,
@@ -20,7 +21,7 @@ export default function RunFiltersModal({
   useEffect(() => {
     if (!isOpen) return
     setLoading(true)
-    fetch('/api/filters')
+    fetch(`${API_BASE}/api/filters`)
       .then((r) => r.json())
       .then((d) => setAllFilters(d.filters || []))
       .catch(console.error)
@@ -56,7 +57,7 @@ export default function RunFiltersModal({
     setSubmitting(true)
     setError(null)
     try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions`, {
+      const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filter_ids: selectedIds }),

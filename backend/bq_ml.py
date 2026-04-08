@@ -3,10 +3,10 @@ import hashlib
 from db import (
     bq_client, db as firestore_db, PROJECT_ID, DATASET_ID, CONNECTION_ID,
     MODEL_GEMINI, MODEL_EMBEDDINGS,
-    T_RESULTS, T_PORTFOLIO_ITEMS, T_PORTFOLIO_EMBEDDINGS, 
-    T_PORTFOLIO_ITEMS_V2, T_PORTFOLIO_EMBEDDINGS_V2,
+    T_DATASET_ITEMS, T_DATASET_EMBEDDINGS,
     T_GAP_ANALYSIS, T_FILTER_RESULTS,
     FILTER_BATCH_SIZE,
+    SEARCH_VOLUME_TYPES,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,55 +49,6 @@ def run_bq_scalar(sql: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Portfolio sync: Firestore → BQ (runtime, on-demand)
-# ---------------------------------------------------------------------------
-
-def _sync_portfolio_items(portfolio_id: str) -> int:
-    """
-    Read portfolio items from Firestore and upsert them into portfolio_items_v2.
-    Firestore is the source of truth; BQ is a runtime cache.
-    Returns the number of items synced.
-    """
-    if not firestore_db:
-        raise RuntimeError("Firestore client not available")
-
-    doc = firestore_db.collection("portfolios").document(portfolio_id).get()
-    if not doc.exists:
-        raise ValueError(f"Portfolio {portfolio_id} not found in Firestore")
-
-    items = doc.to_dict().get("items", [])
-    if not items:
-        raise ValueError(f"Portfolio {portfolio_id} has no items")
-
-    print(f"📋 Syncing {len(items)} portfolio items to BQ (portfolio_id={portfolio_id})")
-
-    # Delete existing rows for this portfolio, then re-insert from Firestore
-    bq_client.query(
-        f"DELETE FROM {_t(T_PORTFOLIO_ITEMS_V2)} WHERE portfolio_id = '{portfolio_id}'"
-    ).result()
-
-    # BQ INSERT VALUES has a limit of ~1MB per query; batch in chunks of 500
-    chunk_size = 500
-    total_inserted = 0
-    for i in range(0, len(items), chunk_size):
-        chunk = items[i:i + chunk_size]
-        values = ", ".join(
-            f"('{portfolio_id}', '{_sq(item)}', CURRENT_TIMESTAMP())"
-            for item in chunk
-            if item and item.strip()
-        )
-        if values:
-            bq_client.query(
-                f"INSERT INTO {_t(T_PORTFOLIO_ITEMS_V2)} "
-                f"(portfolio_id, item_text, added_at) VALUES {values}"
-            ).result()
-            total_inserted += len(chunk)
-
-    print(f"✅ Synced {total_inserted} portfolio items to BQ (portfolio_id={portfolio_id})")
-    return total_inserted
-
-
-# ---------------------------------------------------------------------------
 # Startup: create BQ ML models if not present
 # ---------------------------------------------------------------------------
 
@@ -123,7 +74,76 @@ def create_models_if_not_exist():
 
 
 # ---------------------------------------------------------------------------
-# Gap analysis pipeline
+# Default intent prompts by dataset type
+# ---------------------------------------------------------------------------
+
+_DEFAULT_KEYWORD_PROMPT = """Analyze this search keyword and transform it into a user intent statement.
+
+Return ONLY raw JSON (no markdown, no code blocks).
+
+Transform the keyword into a normalized intent string with the exact format:
+"I am [Persona] looking for [Specific Need]"
+
+Guidelines:
+- [Persona]: Who is the searcher? (e.g., 'a consumer', 'a shopper', 'a parent', 'an athlete', 'someone')
+- [Specific Need]: What are they trying to find or accomplish? Be specific and actionable.
+- Keep it concise and focused on the core intent
+- Use natural, conversational language
+- Capture purchase intent when present (e.g., 'shopping for', 'to buy', 'to purchase')
+
+Examples:
+- Keyword: 'best laptops' → Intent: 'I am a consumer shopping for the best laptops'
+- Keyword: 'running shoes for flat feet' → Intent: 'I am an athlete looking for running shoes suitable for flat feet'
+- Keyword: 'how to fix leaky faucet' → Intent: 'I am a homeowner looking for instructions to fix a leaky faucet'"""
+
+_DEFAULT_TEXT_LIST_PROMPT = """Analyze this topic and transform it into a user intent statement.
+
+Return ONLY raw JSON (no markdown, no code blocks).
+
+Transform the topic into a normalized intent string with the exact format:
+"I am [Persona] looking for [Specific Need]"
+
+Guidelines:
+- [Persona]: Who is interested in this topic? (e.g., 'a consumer', 'a shopper', 'someone', 'a person')
+- [Specific Need]: What are they trying to find? Be specific about the product or information.
+- Keep it concise and focused on the core intent
+- Use natural, conversational language
+
+Examples:
+- Topic: 'cologne' → Intent: 'I am a shopper looking for cologne'
+- Topic: 'non toxic cookware' → Intent: 'I am a consumer looking for non-toxic cookware'
+- Topic: 'luggage' → Intent: 'I am a traveler looking for luggage'"""
+
+_DEFAULT_AD_COPY_PROMPT = """Analyze this ad copy and describe the user intent it is targeting.
+
+Return ONLY raw JSON (no markdown, no code blocks).
+
+Transform the ad copy into a normalized intent string with the exact format:
+"I am [Persona] looking for [Specific Need]"
+
+Guidelines:
+- Infer the target audience from the ad's messaging and offers
+- [Persona]: Who is the ad targeting? (e.g., 'a consumer', 'a business owner', 'a parent')
+- [Specific Need]: What need or desire does the ad address?
+- Keep it concise and focused on the core intent the ad is designed to capture
+
+Examples:
+- Ad: 'Headline1: Get Car Insurance Today\\nDescription1: Compare rates from top providers.' → Intent: 'I am a driver looking for affordable car insurance'
+- Ad: 'Headline1: Best Running Shoes\\nDescription1: Shop top brands with free shipping.' → Intent: 'I am an athlete shopping for running shoes'"""
+
+
+def get_default_prompt_for_type(dataset_type: str) -> str:
+    """Return the default intent prompt for a given dataset type."""
+    if dataset_type in ("google_ads_keywords", "google_ads_keyword_planner", "google_ads_search_terms"):
+        return _DEFAULT_KEYWORD_PROMPT
+    elif dataset_type == "google_ads_ad_copy":
+        return _DEFAULT_AD_COPY_PROMPT
+    else:
+        return _DEFAULT_TEXT_LIST_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Gap analysis pipeline (v3)
 # ---------------------------------------------------------------------------
 
 _INTENT_JSON_SUFFIX = (
@@ -145,131 +165,141 @@ _EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 'SEMANTIC_SIMILARITY' AS task_t
 
 def run_gap_analysis_pipeline(
     analysis_id: str,
-    report_id: str,
-    portfolio_id: str,
-    keyword_prompt: str,
-    portfolio_prompt: str,
+    source_dataset_id: str,
+    target_dataset_ids: list,  # list of dataset_ids (1 for single dataset, N for group)
+    source_prompt: str,
+    target_prompt: str,
+    source_dataset_type: str,
     min_monthly_searches: int = 1000,
 ) -> int:
     """
-    Run the full 5-step gap analysis pipeline using v2 tables with portfolio_id.
+    Run the full gap analysis pipeline using v3 dataset_items / dataset_embeddings tables.
+
+    source_dataset_id: the dataset to search (universe)
+    target_dataset_ids: list of dataset IDs to compare against (existing coverage)
+    source_prompt: intent prompt for source items
+    target_prompt: intent prompt for target items
+    source_dataset_type: used to decide whether to apply min_monthly_searches filter
     Returns the number of result rows inserted.
-    Raises on any BQ error.
     """
-    ph = compute_prompt_hash(portfolio_prompt)
-    kp = _sq(keyword_prompt)
-    pp = _sq(portfolio_prompt)
-    tid = analysis_id.replace("-", "_")  # BQ table names can't have hyphens
+    source_ph = compute_prompt_hash(source_prompt)
+    target_ph = compute_prompt_hash(target_prompt)
+    sp = _sq(source_prompt)
+    tp = _sq(target_prompt)
+    tid = analysis_id.replace("-", "_")
 
-    tmp_kw_intent = f"_tmp_{tid}_kw_intent"
-    tmp_kw_emb = f"_tmp_{tid}_kw_emb"
-    tmp_pi_intent = f"_tmp_{tid}_pi_intent"
+    tmp_src_intent = f"_tmp_{tid}_src_intent"
+    tmp_src_emb = f"_tmp_{tid}_src_emb"
+    tmp_tgt_intent = f"_tmp_{tid}_tgt_intent"
 
-    # Step 0: sync portfolio items from Firestore → BQ (source of truth is Firestore)
-    _sync_portfolio_items(portfolio_id)
+    # Build SQL IN clause for target dataset IDs
+    target_ids_sql = ", ".join(f"'{did}'" for did in target_dataset_ids)
 
-    # Step 1: keyword intent strings
+    # Step 1: source item intent strings
+    # Apply min_monthly_searches filter only for types that have search volume
+    search_vol_filter = ""
+    if source_dataset_type in SEARCH_VOLUME_TYPES and min_monthly_searches > 0:
+        search_vol_filter = f"AND avg_monthly_searches >= {min_monthly_searches}"
+
     run_bq(f"""
-        CREATE OR REPLACE TABLE {_t(tmp_kw_intent)} AS
+        CREATE OR REPLACE TABLE {_t(tmp_src_intent)} AS
         WITH llm AS (
           SELECT * FROM ML.GENERATE_TEXT(
             MODEL {_m(MODEL_GEMINI)},
             (
               SELECT DISTINCT
-                keyword_text,
-                CONCAT('{kp}', '\\n\\nKeyword: ', keyword_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-              FROM {_t(T_RESULTS)}
-              WHERE run_id = '{report_id}'
-                AND avg_monthly_searches >= {min_monthly_searches}
+                item_text,
+                CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+              FROM {_t(T_DATASET_ITEMS)}
+              WHERE dataset_id = '{source_dataset_id}'
+                {search_vol_filter}
             ),
             {_LLM_OPTS}
           )
         )
-        SELECT keyword_text, {_PARSE_INTENT} AS intent_string FROM llm
-    """, "Step 1: keyword intents")
+        SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
+    """, "Step 1: source item intents")
 
-    # Step 2: keyword embeddings
+    # Step 2: source item embeddings
     run_bq(f"""
-        CREATE OR REPLACE TABLE {_t(tmp_kw_emb)} AS
-        SELECT keyword_text, intent_string, ml_generate_embedding_result AS embedding
+        CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
+        SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
         FROM ML.GENERATE_EMBEDDING(
           MODEL {_m(MODEL_EMBEDDINGS)},
           (
-            SELECT DISTINCT keyword_text, intent_string, intent_string AS content
-            FROM {_t(tmp_kw_intent)}
+            SELECT DISTINCT item_text, intent_string, intent_string AS content
+            FROM {_t(tmp_src_intent)}
             WHERE intent_string IS NOT NULL
           ),
           {_EMB_OPTS}
         )
-    """, "Step 2: keyword embeddings")
+    """, "Step 2: source item embeddings")
 
-    # Step 3a: count uncached portfolio items FOR THIS PORTFOLIO
+    # Step 3a: count uncached target items
     uncached = run_bq_scalar(f"""
-        SELECT COUNT(DISTINCT pi.item_text)
-        FROM {_t(T_PORTFOLIO_ITEMS_V2)} pi
-        LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
-          ON pi.item_text = pe.item_text 
-          AND pi.portfolio_id = pe.portfolio_id
-          AND pe.prompt_hash = '{ph}'
-        WHERE pi.portfolio_id = '{portfolio_id}'
-          AND pe.item_text IS NULL
+        SELECT COUNT(DISTINCT di.item_text)
+        FROM {_t(T_DATASET_ITEMS)} di
+        LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+          ON di.item_text = de.item_text
+          AND di.dataset_id = de.dataset_id
+          AND de.prompt_hash = '{target_ph}'
+        WHERE di.dataset_id IN ({target_ids_sql})
+          AND de.item_text IS NULL
     """)
-    print(f"📊 Uncached portfolio items (portfolio_id={portfolio_id}): {uncached}")
+    print(f"📊 Uncached target items: {uncached}")
 
     if uncached > 0:
-        # Step 3b: portfolio intent strings for uncached items
+        # Step 3b: target item intent strings for uncached items
         run_bq(f"""
-            CREATE OR REPLACE TABLE {_t(tmp_pi_intent)} AS
+            CREATE OR REPLACE TABLE {_t(tmp_tgt_intent)} AS
             WITH llm AS (
               SELECT * FROM ML.GENERATE_TEXT(
                 MODEL {_m(MODEL_GEMINI)},
                 (
-                  SELECT DISTINCT pi.item_text,
-                    CONCAT('{pp}', '\\n\\nTopic: ', pi.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                  FROM {_t(T_PORTFOLIO_ITEMS_V2)} pi
-                  LEFT JOIN {_t(T_PORTFOLIO_EMBEDDINGS_V2)} pe
-                    ON pi.item_text = pe.item_text 
-                    AND pi.portfolio_id = pe.portfolio_id
-                    AND pe.prompt_hash = '{ph}'
-                  WHERE pi.portfolio_id = '{portfolio_id}'
-                    AND pe.item_text IS NULL
+                  SELECT DISTINCT di.item_text,
+                    CONCAT('{tp}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                  FROM {_t(T_DATASET_ITEMS)} di
+                  LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+                    ON di.item_text = de.item_text
+                    AND di.dataset_id = de.dataset_id
+                    AND de.prompt_hash = '{target_ph}'
+                  WHERE di.dataset_id IN ({target_ids_sql})
+                    AND de.item_text IS NULL
                 ),
                 {_LLM_OPTS}
               )
             )
             SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-        """, "Step 3b: portfolio intents for uncached items")
+        """, "Step 3b: target item intents for uncached items")
 
-        # Step 3c: insert new embeddings into v2 cache.
-        # Re-check at write time (NOT IN subquery) to prevent duplicate rows if two
-        # analyses for the same portfolio race past the step-3a uncached check simultaneously.
-        run_bq(f"""
-            INSERT INTO {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
-              (portfolio_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-            SELECT '{portfolio_id}' AS portfolio_id,
-                   item_text, intent_string, ml_generate_embedding_result AS embedding,
-                   '{ph}' AS prompt_hash, CURRENT_TIMESTAMP() AS embedded_at
-            FROM ML.GENERATE_EMBEDDING(
-              MODEL {_m(MODEL_EMBEDDINGS)},
-              (
-                SELECT DISTINCT item_text, intent_string, intent_string AS content
-                FROM {_t(tmp_pi_intent)}
-                WHERE intent_string IS NOT NULL
-              ),
-              {_EMB_OPTS}
-            )
-            WHERE item_text NOT IN (
-              SELECT item_text
-              FROM {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
-              WHERE portfolio_id = '{portfolio_id}' AND prompt_hash = '{ph}'
-            )
-        """, "Step 3c: populate portfolio embeddings cache (v2)")
+        # Step 3c: insert new embeddings into cache (one row per dataset_id × item_text)
+        # We insert for each target dataset separately to maintain dataset_id keying
+        for did in target_dataset_ids:
+            run_bq(f"""
+                INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
+                  (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
+                SELECT '{did}' AS dataset_id,
+                       item_text, intent_string, ml_generate_embedding_result AS embedding,
+                       '{target_ph}' AS prompt_hash, CURRENT_TIMESTAMP() AS embedded_at
+                FROM ML.GENERATE_EMBEDDING(
+                  MODEL {_m(MODEL_EMBEDDINGS)},
+                  (
+                    SELECT DISTINCT t.item_text, t.intent_string, t.intent_string AS content
+                    FROM {_t(tmp_tgt_intent)} t
+                    INNER JOIN {_t(T_DATASET_ITEMS)} di
+                      ON t.item_text = di.item_text AND di.dataset_id = '{did}'
+                    WHERE t.intent_string IS NOT NULL
+                  ),
+                  {_EMB_OPTS}
+                )
+                WHERE item_text NOT IN (
+                  SELECT item_text
+                  FROM {_t(T_DATASET_EMBEDDINGS)}
+                  WHERE dataset_id = '{did}' AND prompt_hash = '{target_ph}'
+                )
+            """, f"Step 3c: populate target embeddings cache (dataset_id={did})")
 
-    # Step 4: compute top-3 distances via VECTOR_SEARCH (exact/brute-force) and insert results.
-    # use_brute_force=TRUE bypasses the IVF index, which produces poor results when the
-    # per-portfolio subset is small relative to the full embeddings table. Exact search is
-    # safe here because portfolio size is at most a few thousand items, and the keyword set
-    # is bounded by min_monthly_searches (≤100K unique keywords per BQ VECTOR_SEARCH limit).
+    # Step 4: VECTOR_SEARCH against all target embeddings and insert results
     run_bq(f"""
         INSERT INTO {_t(T_GAP_ANALYSIS)}
           (analysis_id, created_at, keyword_text, keyword_intent,
@@ -277,51 +307,49 @@ def run_gap_analysis_pipeline(
            semantic_distance, avg_monthly_searches)
         WITH vs AS (
           SELECT
-            query.keyword_text,
+            query.item_text AS keyword_text,
             query.intent_string AS keyword_intent,
-            base.item_text AS portfolio_item,
-            base.intent_string AS portfolio_intent,
+            base.item_text AS target_item,
+            base.intent_string AS target_intent,
             distance AS semantic_distance
           FROM VECTOR_SEARCH(
             (
               SELECT *
-              FROM {_t(T_PORTFOLIO_EMBEDDINGS_V2)}
-              WHERE portfolio_id = '{portfolio_id}' AND prompt_hash = '{ph}'
+              FROM {_t(T_DATASET_EMBEDDINGS)}
+              WHERE dataset_id IN ({target_ids_sql}) AND prompt_hash = '{target_ph}'
             ),
             'embedding',
-            (SELECT keyword_text, intent_string, embedding FROM {_t(tmp_kw_emb)}),
+            (SELECT item_text, intent_string, embedding FROM {_t(tmp_src_emb)}),
             top_k => 3,
             distance_type => 'COSINE',
             options => '{{"use_brute_force": true}}'
           )
-          INNER JOIN {_t(T_PORTFOLIO_ITEMS_V2)} pi
-            ON base.item_text = pi.item_text AND base.portfolio_id = pi.portfolio_id
         )
         SELECT
           '{analysis_id}' AS analysis_id,
           CURRENT_TIMESTAMP() AS created_at,
           vs.keyword_text,
           vs.keyword_intent,
-          vs.portfolio_item AS closest_portfolio_item,
-          vs.portfolio_intent AS closest_portfolio_intent,
+          vs.target_item AS closest_portfolio_item,
+          vs.target_intent AS closest_portfolio_intent,
           vs.semantic_distance,
           kw.avg_monthly_searches
         FROM vs
         LEFT JOIN (
-          SELECT keyword_text, MAX(avg_monthly_searches) AS avg_monthly_searches
-          FROM {_t(T_RESULTS)}
-          WHERE run_id = '{report_id}'
-          GROUP BY keyword_text
-        ) kw ON vs.keyword_text = kw.keyword_text
+          SELECT item_text, MAX(avg_monthly_searches) AS avg_monthly_searches
+          FROM {_t(T_DATASET_ITEMS)}
+          WHERE dataset_id = '{source_dataset_id}'
+          GROUP BY item_text
+        ) kw ON vs.keyword_text = kw.item_text
     """, "Step 4: insert gap analysis results (VECTOR_SEARCH)")
 
-    # Count distinct keywords analyzed (up to 3 rows per keyword now)
+    # Count distinct source items analyzed
     count = run_bq_scalar(f"""
         SELECT COUNT(DISTINCT keyword_text) FROM {_t(T_GAP_ANALYSIS)} WHERE analysis_id = '{analysis_id}'
     """)
 
-    # Step 5: cleanup temp tables (best effort — leave on failure for debugging)
-    for tmp in [tmp_kw_intent, tmp_kw_emb, tmp_pi_intent]:
+    # Step 5: cleanup temp tables (best effort)
+    for tmp in [tmp_src_intent, tmp_src_emb, tmp_tgt_intent]:
         try:
             run_bq(f"DROP TABLE IF EXISTS {_t(tmp)}", f"Cleanup {tmp}")
         except Exception:
@@ -331,7 +359,7 @@ def run_gap_analysis_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Filter execution pipeline
+# Filter execution pipeline (unchanged from v2)
 # ---------------------------------------------------------------------------
 
 _FILTER_LLM_OPTS = "STRUCT(100 AS max_output_tokens, 0.1 AS temperature, TRUE AS flatten_json_output)"
@@ -355,10 +383,8 @@ def run_filter_pipeline(
     Returns the number of rows inserted into filter_results.
     """
     label = filter_snapshot["label"]
-    label_sql = _sq(label)  # label safe for BQ single-quoted string
+    label_sql = _sq(label)
 
-    # Build the full prompt text in Python first, then escape once with _sq().
-    # The LLM is asked to return: {"<label>": true/false, "confidence": "high/medium/low"}
     prompt_prefix = (
         f"{filter_snapshot['text']}\n\n"
         f"Evaluate this keyword.\n\n"
@@ -367,11 +393,8 @@ def run_filter_pipeline(
         f"Keyword: "
     )
     escaped_prefix = _sq(prompt_prefix)
-
-    # CONCAT appends the keyword_text to the static prompt prefix
     prompt_concat = f"CONCAT('{escaped_prefix}', keyword_text)"
 
-    # JSON parse helpers — strip markdown fences then extract fields
     def _parse(field: str) -> str:
         return (
             f"JSON_VALUE(\n"
@@ -383,7 +406,6 @@ def run_filter_pipeline(
             f"            )"
         )
 
-    # Count total distinct keywords for this analysis
     total_keywords = run_bq_scalar(f"""
         SELECT COUNT(DISTINCT keyword_text)
         FROM {_t(T_GAP_ANALYSIS)}
@@ -395,8 +417,6 @@ def run_filter_pipeline(
         print(f"⚠️ No keywords found for analysis {analysis_id} — nothing to filter")
         return 0
 
-    # Process in batches using ROW_NUMBER() for stable pagination.
-    # Each batch stays well under the BQ on-demand CPU/bytes ratio limit.
     total_inserted = 0
     num_batches = (total_keywords + FILTER_BATCH_SIZE - 1) // FILTER_BATCH_SIZE
 
@@ -455,14 +475,12 @@ def run_filter_pipeline(
 
         total_inserted += min(FILTER_BATCH_SIZE, total_keywords - offset)
 
-        # Notify caller of progress (used to update Firestore total_evaluated)
         if on_batch_complete:
             try:
                 on_batch_complete(total_inserted)
             except Exception as e:
                 print(f"⚠️ on_batch_complete callback error: {e}")
 
-    # Final count from BQ (source of truth)
     count = run_bq_scalar(f"""
         SELECT COUNT(*) FROM {_t(T_FILTER_RESULTS)}
         WHERE execution_id = '{execution_id}'

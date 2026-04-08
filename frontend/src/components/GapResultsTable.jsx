@@ -1,25 +1,22 @@
 import SortIcon from './SortIcon'
 import PaginationBar from './PaginationBar'
 
-const SORT_COLUMNS = [
-  { key: 'keyword_text',         label: 'Keyword',      descFirst: false },
-  { key: 'avg_monthly_searches', label: 'Searches/mo',  descFirst: true,  alignRight: true },
-  { key: 'semantic_distance',    label: 'Distance',     descFirst: true,  alignRight: true },
-]
-
 /**
  * GapResultsTable — sortable, paginated gap analysis results.
  *
  * Props
- *   results           — current page rows
- *   totalCount        — total rows across all pages (for PaginationBar)
- *   page / pageSize   — current pagination state
- *   orderBy / orderDir — current sort state
- *   loading           — dims table while fetching
- *   completedExecs    — [{ execution_id, filter_snapshot }] for filter columns
- *   filterResultsMap  — { exec_id → { keyword_text → bool } }
- *   highlightThreshold — semantic_distance ≥ this → yellow row
- *   expandedRows      — Set<number> of expanded row indices
+ *   results             — current page rows
+ *   totalCount          — total rows across all pages (for PaginationBar)
+ *   page / pageSize     — current pagination state
+ *   orderBy / orderDir  — current sort state
+ *   loading             — dims table while fetching
+ *   completedExecs      — [{ execution_id, filter_snapshot }] for filter columns
+ *   filterResultsMap    — { exec_id → { keyword_text → bool } }
+ *   highlightThreshold  — semantic_distance ≥ this → yellow row
+ *   expandedRows        — Set<number> of expanded row indices
+ *   sourceColumnLabel   — header for the source item column (default: 'Source Item')
+ *   targetColumnLabel   — header for the closest target column (default: 'Closest Match')
+ *   showSearchVolume    — whether to show the Searches/mo column (default: true)
  *   onSort(key, dir)
  *   onPageChange(page)
  *   onPageSizeChange(size)
@@ -37,11 +34,20 @@ export default function GapResultsTable({
   filterResultsMap = {},
   highlightThreshold = 0.2,
   expandedRows = new Set(),
+  sourceColumnLabel = 'Source Item',
+  targetColumnLabel = 'Closest Match',
+  showSearchVolume = true,
   onSort,
   onPageChange,
   onPageSizeChange,
   onToggleRow,
 }) {
+  const SORT_COLUMNS = [
+    { key: 'keyword_text',         label: sourceColumnLabel, descFirst: false },
+    ...(showSearchVolume ? [{ key: 'avg_monthly_searches', label: 'Searches/mo', descFirst: true, alignRight: true }] : []),
+    { key: 'semantic_distance',    label: 'Distance',        descFirst: true,  alignRight: true },
+  ]
+
   const handleColClick = (col) => {
     if (col.key === orderBy) {
       onSort(col.key, orderDir === 'DESC' ? 'ASC' : 'DESC')
@@ -78,7 +84,7 @@ export default function GapResultsTable({
                   <SortIcon active={orderBy === col.key} dir={orderDir} />
                 </th>
               ))}
-              <th className="text-left px-4 py-3 font-semibold text-gray-700">Closest Portfolio Item</th>
+              <th className="text-left px-4 py-3 font-semibold text-gray-700">{targetColumnLabel}</th>
               {completedExecs.map((e) => (
                 <th key={e.execution_id} className="text-center px-3 py-3 font-semibold text-gray-700 whitespace-nowrap">
                   {e.filter_snapshot.name}
@@ -108,9 +114,11 @@ export default function GapResultsTable({
                       className={`${isHighlighted ? 'bg-yellow-50' : 'hover:bg-gray-50'} ${hasMultiple ? 'cursor-pointer' : ''}`}
                     >
                       <td className="px-4 py-2.5 font-medium text-gray-900">{row.keyword_text}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
-                        {row.avg_monthly_searches?.toLocaleString() ?? '—'}
-                      </td>
+                      {showSearchVolume && (
+                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
+                          {row.avg_monthly_searches?.toLocaleString() ?? '—'}
+                        </td>
+                      )}
                       <td className="px-4 py-2.5 text-right tabular-nums">
                         <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
                           isHighlighted ? 'bg-yellow-200 text-yellow-800' : 'text-gray-600'

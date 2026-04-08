@@ -3,6 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import RunFiltersModal from '../components/RunFiltersModal'
 import EditableTitle from '../components/EditableTitle'
 import GapResultsTable from '../components/GapResultsTable'
+import API_BASE from '../config'
+
+const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 
 // Three-state toggle: any → true → false → any
 function FilterModeToggle({ label, mode, onChange, onDelete }) {
@@ -49,8 +52,8 @@ export default function GapAnalysisDetailPage() {
 
   const [analysis, setAnalysis] = useState(null)
   const [executions, setExecutions] = useState([])
-  const [filterResultsMap, setFilterResultsMap] = useState({}) // exec_id → {keyword_text → result}
-  const [filterModes, setFilterModes] = useState({})           // exec_id → 'any' | 'true' | 'false'
+  const [filterResultsMap, setFilterResultsMap] = useState({})
+  const [filterModes, setFilterModes] = useState({})
 
   const [results, setResults] = useState([])
   const [totalCount, setTotalCount] = useState(0)
@@ -58,21 +61,18 @@ export default function GapAnalysisDetailPage() {
   const [pageLoading, setPageLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  // Pagination + sort state
   const [page, setPage]         = useState(0)
   const [pageSize, setPageSize] = useState(100)
   const [orderBy, setOrderBy]   = useState('semantic_distance')
   const [orderDir, setOrderDir] = useState('DESC')
 
-  // UI controls
-  const [minSearches, setMinSearches]         = useState(1000)
-  const [minSearchesInput, setMinSearchesInput] = useState('1000')
+  const [minSearches, setMinSearches]           = useState(0)
+  const [minSearchesInput, setMinSearchesInput] = useState('0')
   const [highlightThreshold, setHighlightThreshold] = useState(0.2)
-  const [highlightInput, setHighlightInput]   = useState('0.2')
+  const [highlightInput, setHighlightInput]     = useState('0.2')
 
   const [renaming, setRenaming] = useState(false)
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
-  const [portfolioSnapshot, setPortfolioSnapshot] = useState(null)
   const loadedFilterResultsRef = useRef(new Set())
   const [expandedRows, setExpandedRows] = useState(new Set())
   const [showCopied, setShowCopied] = useState(false)
@@ -82,30 +82,27 @@ export default function GapAnalysisDetailPage() {
     if (!executions.some((e) => e.status === 'processing')) return
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions`)
+        const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions`)
         if (!res.ok) return
         const data = await res.json()
         const fresh = data.executions || []
         setExecutions(fresh)
-
         setFilterModes((prev) => {
           const next = { ...prev }
           fresh.forEach((e) => { if (!(e.execution_id in next)) next[e.execution_id] = 'any' })
           return next
         })
-
         const completedIds = fresh.filter((e) => e.status === 'completed').map((e) => e.execution_id)
         for (const execId of completedIds) {
           if (loadedFilterResultsRef.current.has(execId)) continue
           loadedFilterResultsRef.current.add(execId)
           try {
-            const r = await fetch(`/api/gap-analyses/${analysisId}/filter-executions/${execId}/results`)
+            const r = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions/${execId}/results`)
             const rows = await r.json()
             const map = {}
             rows.forEach((row) => { map[row.keyword_text] = row.result })
             setFilterResultsMap((prev) => ({ ...prev, [execId]: map }))
           } catch (err) {
-            console.error('Failed to load filter results for', execId, err)
             loadedFilterResultsRef.current.delete(execId)
           }
         }
@@ -123,19 +120,17 @@ export default function GapAnalysisDetailPage() {
       setError(null)
       try {
         const [analysisRes, execsRes] = await Promise.all([
-          fetch(`/api/gap-analyses/${analysisId}`),
-          fetch(`/api/gap-analyses/${analysisId}/filter-executions`),
+          fetch(`${API_BASE}/api/gap-analyses/${analysisId}`),
+          fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions`),
         ])
         if (!analysisRes.ok) throw new Error('Analysis not found')
         const analysisData = await analysisRes.json()
         setAnalysis(analysisData)
 
-        if (analysisData.min_monthly_searches != null) {
+        // Set min searches from analysis if source type has search volume
+        if (analysisData.min_monthly_searches != null && SEARCH_VOLUME_TYPES.has(analysisData.source_dataset_type)) {
           setMinSearches(analysisData.min_monthly_searches)
           setMinSearchesInput(String(analysisData.min_monthly_searches))
-        }
-        if (analysisData.portfolio_snapshot) {
-          setPortfolioSnapshot(analysisData.portfolio_snapshot)
         }
 
         const execsData = execsRes.ok ? await execsRes.json() : { executions: [] }
@@ -150,7 +145,7 @@ export default function GapAnalysisDetailPage() {
         if (completedExecs.length > 0) {
           const resolved = await Promise.all(
             completedExecs.map((e) =>
-              fetch(`/api/gap-analyses/${analysisId}/filter-executions/${e.execution_id}/results`)
+              fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions/${e.execution_id}/results`)
                 .then((r) => r.ok ? r.json() : [])
                 .then((rows) => {
                   const map = {}
@@ -173,7 +168,6 @@ export default function GapAnalysisDetailPage() {
     init()
   }, [analysisId])
 
-  // Build results URL — includes all pagination, sort, filter params
   const buildResultsUrl = useCallback(() => {
     const params = new URLSearchParams()
     params.set('limit', String(pageSize))
@@ -185,10 +179,9 @@ export default function GapAnalysisDetailPage() {
       if (mode === 'true')  params.append('filter_execution_ids', execId)
       else if (mode === 'false') params.append('filter_execution_ids_false', execId)
     })
-    return `/api/gap-analyses/${analysisId}/results?${params.toString()}`
+    return `${API_BASE}/api/gap-analyses/${analysisId}/results?${params.toString()}`
   }, [analysisId, filterModes, page, pageSize, orderBy, orderDir, minSearches])
 
-  // Fetch results whenever URL changes
   const [filterModesReady, setFilterModesReady] = useState(false)
   const [lastUrl, setLastUrl] = useState('')
 
@@ -220,7 +213,6 @@ export default function GapAnalysisDetailPage() {
     fetchResults()
   }, [filterModes, analysis, filterModesReady, buildResultsUrl, lastUrl])
 
-  // Handlers
   const handleFilterModeChange = (execId, mode) => {
     setFilterModes((prev) => ({ ...prev, [execId]: mode }))
     setPage(0)
@@ -249,7 +241,7 @@ export default function GapAnalysisDetailPage() {
   const handleDeleteFilter = async (execId, filterName) => {
     if (!window.confirm(`Delete filter "${filterName}"? This cannot be undone.`)) return
     try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions/${execId}`, {
+      const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions/${execId}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw new Error('Failed to delete filter')
@@ -265,7 +257,7 @@ export default function GapAnalysisDetailPage() {
   const handleRename = async (newName) => {
     setRenaming(true)
     try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}/rename`, {
+      const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/rename`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName }),
@@ -304,17 +296,18 @@ export default function GapAnalysisDetailPage() {
     })
   }
 
-  // Copy current page to clipboard in the selected format
   const handleCopyToClipboard = (fmt) => {
+    const srcName = analysis?.source_dataset_name || 'Source'
+    const tgtName = analysis?.target_dataset_name || 'Target'
     let text = ''
     if (fmt === 'md') {
-      text = '| Keyword | Searches/mo | Distance | Closest Portfolio Item |\n'
-      text += '|---------|-------------|----------|------------------------|\n'
+      text = `| ${srcName} | Searches/mo | Distance | Closest in ${tgtName} |\n`
+      text += `|---------|-------------|----------|------------------------|\n`
       results.forEach((r) => {
         text += `| ${r.keyword_text || '—'} | ${r.avg_monthly_searches?.toLocaleString() || '—'} | ${r.semantic_distance?.toFixed(3) || '—'} | ${r.portfolio_matches?.[0]?.item || '—'} |\n`
       })
     } else if (fmt === 'csv') {
-      text = 'keyword,searches_per_month,distance,closest_portfolio_item\n'
+      text = `source_item,searches_per_month,distance,closest_target_item\n`
       results.forEach((r) => {
         const kw   = (r.keyword_text || '').replace(/"/g, '""')
         const item = (r.portfolio_matches?.[0]?.item || '').replace(/"/g, '""')
@@ -323,11 +316,11 @@ export default function GapAnalysisDetailPage() {
     } else if (fmt === 'json') {
       text = JSON.stringify(
         results.map((r) => ({
-          keyword: r.keyword_text,
+          source_item: r.keyword_text,
           searches_per_month: r.avg_monthly_searches,
           distance: r.semantic_distance,
-          closest_portfolio_item: r.portfolio_matches?.[0]?.item || null,
-          portfolio_matches: r.portfolio_matches || [],
+          closest_target_item: r.portfolio_matches?.[0]?.item || null,
+          target_matches: r.portfolio_matches || [],
         })),
         null, 2
       )
@@ -340,6 +333,7 @@ export default function GapAnalysisDetailPage() {
 
   const completedExecs = executions.filter((e) => e.status === 'completed')
   const failedExecs = executions.filter((e) => e.status === 'failed')
+  const showSearchVolumeControls = analysis && SEARCH_VOLUME_TYPES.has(analysis.source_dataset_type)
 
   if (pageLoading) {
     return (
@@ -384,7 +378,7 @@ export default function GapAnalysisDetailPage() {
             Back to Gap Analyses
           </button>
           <EditableTitle value={analysis.name} onSave={handleRename} saving={renaming} />
-          <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+          <div className="flex items-center gap-2 text-sm text-gray-600 mt-1 flex-wrap">
             <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
               analysis.status === 'completed'  ? 'bg-green-100 text-green-800' :
               analysis.status === 'processing' ? 'bg-blue-100 text-blue-800' :
@@ -394,19 +388,14 @@ export default function GapAnalysisDetailPage() {
               {analysis.status === 'processing' ? 'In Progress' : analysis.status}
             </span>
             <span>·</span>
-            <span>{totalCount.toLocaleString()} keywords</span>
-            {portfolioSnapshot && (
-              <>
-                <span>·</span>
-                <span>{portfolioSnapshot.items?.length || 0} portfolio items</span>
-              </>
-            )}
-            {analysis.min_monthly_searches != null && (
-              <>
-                <span>·</span>
-                <span>{analysis.min_monthly_searches.toLocaleString()} min. monthly searches</span>
-              </>
-            )}
+            <span>{totalCount.toLocaleString()} items</span>
+            <span>·</span>
+            <span className="text-gray-500">
+              <span className="font-medium text-gray-700">{analysis.source_dataset_name}</span>
+              {' → '}
+              <span className="font-medium text-gray-700">{analysis.target_dataset_name}</span>
+              {analysis.target_is_group && <span className="text-xs text-gray-400 ml-1">(group)</span>}
+            </span>
             {executions.length > 0 && (
               <>
                 <span>·</span>
@@ -464,7 +453,6 @@ export default function GapAnalysisDetailPage() {
                       <button
                         onClick={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
                         className="ml-1 text-red-500 hover:text-red-700 text-xs underline"
-                        title="Delete this failed filter so you can re-run it"
                       >
                         delete
                       </button>
@@ -496,20 +484,11 @@ export default function GapAnalysisDetailPage() {
                   <div className="space-y-1 mb-2">
                     {failedExecs.map((e) => (
                       <div key={e.execution_id} className="flex items-center gap-2">
-                        <span className="text-sm text-red-600 font-medium min-w-[100px] truncate" title={e.filter_snapshot.name}>
-                          {e.filter_snapshot.name}
-                        </span>
+                        <span className="text-sm text-red-600 font-medium min-w-[100px] truncate">{e.filter_snapshot.name}</span>
                         <span className="inline-flex px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700">failed</span>
-                        <button
-                          onClick={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)}
-                          className="ml-1 text-red-500 hover:text-red-700 text-xs underline"
-                          title="Delete this failed filter so you can re-run it"
-                        >
-                          delete
-                        </button>
+                        <button onClick={() => handleDeleteFilter(e.execution_id, e.filter_snapshot.name)} className="ml-1 text-red-500 hover:text-red-700 text-xs underline">delete</button>
                       </div>
                     ))}
-                    <p className="text-xs text-gray-400 mt-1">Delete a failed filter to re-run it.</p>
                   </div>
                 )}
                 {executions.length === 0 && (
@@ -524,26 +503,23 @@ export default function GapAnalysisDetailPage() {
               </div>
             )}
 
-            {/* Min searches */}
-            {(() => {
-              const analysisMin = analysis?.min_monthly_searches ?? 0
-              return (
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Min. Monthly Searches</label>
-                  <form onSubmit={(e) => { e.preventDefault(); handleMinSearchesBlur() }}>
-                    <input
-                      type="number"
-                      min={analysisMin > 0 ? analysisMin : 0}
-                      className="w-28 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-                      value={minSearchesInput}
-                      onChange={(e) => setMinSearchesInput(e.target.value)}
-                      onBlur={(e) => e.target.form.requestSubmit()}
-                    />
-                  </form>
-                  <p className="text-xs text-gray-400 mt-0.5">Applied server-side</p>
-                </div>
-              )
-            })()}
+            {/* Min searches (only for search-volume source types) */}
+            {showSearchVolumeControls && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Min. Monthly Searches</label>
+                <form onSubmit={(e) => { e.preventDefault(); handleMinSearchesBlur() }}>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-28 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                    value={minSearchesInput}
+                    onChange={(e) => setMinSearchesInput(e.target.value)}
+                    onBlur={(e) => e.target.form.requestSubmit()}
+                  />
+                </form>
+                <p className="text-xs text-gray-400 mt-0.5">Applied server-side</p>
+              </div>
+            )}
 
             {/* Highlight threshold */}
             <div>
@@ -563,7 +539,7 @@ export default function GapAnalysisDetailPage() {
             {/* Copy + row count */}
             <div className="self-end pb-0.5 text-right relative">
               <div className="flex items-center justify-end gap-2 mb-2">
-                <span className="text-xs text-gray-500">Copy Highlighted Rows:</span>
+                <span className="text-xs text-gray-500">Copy:</span>
                 <div className="flex rounded-md overflow-hidden border border-gray-300">
                   {['md', 'csv', 'json'].map((fmt) => (
                     <button
@@ -608,16 +584,19 @@ export default function GapAnalysisDetailPage() {
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
           onToggleRow={toggleRow}
+          sourceColumnLabel={analysis.source_dataset_name || 'Source Item'}
+          targetColumnLabel={`Closest in ${analysis.target_dataset_name || 'Target'}`}
+          showSearchVolume={showSearchVolumeControls}
         />
 
         <RunFiltersModal
           isOpen={showRunFiltersModal}
           onClose={() => setShowRunFiltersModal(false)}
-          keywordCount={analysis?.total_keywords_analyzed ?? 0}
+          keywordCount={analysis?.total_items_analyzed ?? 0}
           onSubmit={async () => {
             setShowRunFiltersModal(false)
             try {
-              const res = await fetch(`/api/gap-analyses/${analysisId}/filter-executions`)
+              const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions`)
               if (res.ok) {
                 const data = await res.json()
                 setExecutions(data.executions || [])

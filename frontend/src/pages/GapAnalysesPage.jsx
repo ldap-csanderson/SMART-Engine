@@ -1,287 +1,95 @@
-import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import API_BASE from '../config'
 import NewGapAnalysisModal from '../components/NewGapAnalysisModal'
 
 const STATUS_COLORS = {
-  completed: 'bg-green-100 text-green-800',
-  archived: 'bg-gray-100 text-gray-800',
-  processing: 'bg-blue-100 text-blue-800',
-  failed: 'bg-red-100 text-red-800',
+  completed: 'text-green-600',
+  processing: 'text-yellow-600',
+  failed: 'text-red-600',
+  archived: 'text-gray-400',
 }
 
 export default function GapAnalysesPage() {
-  const navigate = useNavigate()
   const [analyses, setAnalyses] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showArchived, setShowArchived] = useState(false)
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [actionLoading, setActionLoading] = useState({})
-  const [reportsMap, setReportsMap] = useState({}) // report_id → report metadata
-  const [executionsMap, setExecutionsMap] = useState({}) // analysis_id → executions[]
-  const showArchivedRef = useRef(showArchived)
+  const [showModal, setShowModal] = useState(false)
 
-  useEffect(() => {
-    showArchivedRef.current = showArchived
-  }, [showArchived])
-
-  const fetchAnalyses = async (showSpinner = false) => {
-    if (showSpinner) setLoading(true)
+  const fetchAnalyses = async () => {
     try {
-      const status = showArchivedRef.current ? 'archived' : undefined
-      const url = status ? `/api/gap-analyses?status=${status}` : '/api/gap-analyses'
-      const res = await fetch(url)
+      const res = await fetch(`${API_BASE}/api/gap-analyses`)
       const data = await res.json()
-      const fresh = data.analyses || []
-      setAnalyses(fresh)
-      return fresh
-    } catch (err) {
-      console.error('Failed to fetch analyses:', err)
-      return null
+      setAnalyses(data.analyses || [])
+    } catch (e) {
+      console.error(e)
     } finally {
-      if (showSpinner) setLoading(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchAnalyses(true)
-  }, [showArchived])
-
-  // Fetch executions for each analysis
-  useEffect(() => {
-    if (analyses.length === 0) return
-    const fetchExecutions = async () => {
-      const map = {}
-      await Promise.all(
-        analyses.map(async (a) => {
-          try {
-            const res = await fetch(`/api/gap-analyses/${a.analysis_id}/filter-executions`)
-            if (res.ok) {
-              const data = await res.json()
-              map[a.analysis_id] = data.executions || []
-            }
-          } catch (err) {
-            console.error(`Failed to fetch executions for ${a.analysis_id}:`, err)
-          }
-        })
-      )
-      setExecutionsMap(map)
-    }
-    fetchExecutions()
-  }, [analyses])
-
-  // Fetch reports map on mount (once)
-  useEffect(() => {
-    const fetchMetadata = async () => {
-      try {
-        const reportsRes = await fetch('/api/keyword-reports')
-        if (reportsRes.ok) {
-          const data = await reportsRes.json()
-          const map = {}
-          ;(data.reports || []).forEach(r => { map[r.report_id] = r })
-          setReportsMap(map)
-        }
-      } catch (err) {
-        console.error('Failed to fetch metadata:', err)
-      }
-    }
-    fetchMetadata()
+    fetchAnalyses()
+    const interval = setInterval(fetchAnalyses, 5000)
+    return () => clearInterval(interval)
   }, [])
 
-  // Poll while any analysis is processing
-  useEffect(() => {
-    if (!analyses.some((a) => a.status === 'processing')) return
-    const timer = setTimeout(() => fetchAnalyses(false), 1000)
-    return () => clearTimeout(timer)
-  }, [analyses])
-
-  const handleArchive = async (analysisId) => {
-    setActionLoading((p) => ({ ...p, [analysisId]: true }))
-    try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}/archive`, { method: 'PATCH' })
-      if (!res.ok) throw new Error('Failed to archive')
-      fetchAnalyses(false)
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    } finally {
-      setActionLoading((p) => ({ ...p, [analysisId]: false }))
-    }
-  }
-
-  const handleUnarchive = async (analysisId) => {
-    setActionLoading((p) => ({ ...p, [analysisId]: true }))
-    try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}/unarchive`, { method: 'PATCH' })
-      if (!res.ok) throw new Error('Failed to unarchive')
-      fetchAnalyses(false)
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    } finally {
-      setActionLoading((p) => ({ ...p, [analysisId]: false }))
-    }
-  }
-
-  const handleDelete = async (analysisId) => {
-    if (!window.confirm('Delete this failed analysis? This cannot be undone.')) return
-    setActionLoading((p) => ({ ...p, [analysisId]: true }))
-    try {
-      const res = await fetch(`/api/gap-analyses/${analysisId}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete')
-      fetchAnalyses(false)
-    } catch (err) {
-      alert(`Error: ${err.message}`)
-    } finally {
-      setActionLoading((p) => ({ ...p, [analysisId]: false }))
-    }
-  }
-
   return (
-    <div className="bg-gray-50">
-      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Gap Analyses</h1>
-            <p className="mt-2 text-gray-600">Semantic gap analysis between keyword traffic and your portfolio</p>
-          </div>
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
-          >
-            + New Analysis
-          </button>
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Gap Analyses</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Semantic comparisons between datasets
+          </p>
         </div>
-
-        {/* Section header with archive toggle */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">
-            {showArchived ? 'Archived Analyses' : 'Recent Analyses'}
-          </h2>
-          <button
-            onClick={() => setShowArchived(!showArchived)}
-            className="px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 focus:outline-none"
-          >
-            {showArchived ? '← Back to Active' : 'View Archived →'}
-          </button>
-        </div>
-
-        {/* List */}
-        {loading ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-3 text-gray-500">Loading analyses…</p>
-          </div>
-        ) : analyses.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            {showArchived ? (
-              <p className="text-gray-500">No archived analyses</p>
-            ) : (
-              <div className="flex flex-col items-center">
-                <button
-                  onClick={() => setIsModalOpen(true)}
-                  className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 mb-4"
-                >
-                  + New Analysis
-                </button>
-                <p className="text-gray-500">No analyses yet — run your first gap analysis</p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {analyses.map((a) => (
-              <div key={a.analysis_id} className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{a.name}</h3>
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${STATUS_COLORS[a.status] || 'bg-yellow-100 text-yellow-800'}`}>
-                        {a.status === 'processing' ? 'In Progress' : a.status}
-                      </span>
-                      <span>·</span>
-                      <span>
-                        {a.status === 'processing' && a.total_keywords_analyzed === 0
-                          ? '—'
-                          : `${a.total_keywords_analyzed.toLocaleString()} keywords`}
-                      </span>
-                      <span>·</span>
-                      <span>{(a.portfolio_snapshot?.items?.length ?? 0).toLocaleString()} portfolio items</span>
-                      {a.min_monthly_searches != null && (
-                        <>
-                          <span>·</span>
-                          <span>{a.min_monthly_searches.toLocaleString()} min. monthly searches</span>
-                        </>
-                      )}
-                      {executionsMap[a.analysis_id]?.length > 0 && (
-                        <>
-                          <span>·</span>
-                          <span>{executionsMap[a.analysis_id].length} filter{executionsMap[a.analysis_id].length > 1 ? 's' : ''}</span>
-                        </>
-                      )}
-                    </div>
-                    <div className="text-sm text-gray-600 space-y-1">
-                      {a.status === 'failed' && a.error_message && (
-                        <p className="text-red-600 text-xs mt-1">Error: {a.error_message}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 ml-4">
-                    {(a.status === 'completed' || a.status === 'archived') && (
-                      <button
-                        onClick={() => navigate(`/gap-analyses/${a.analysis_id}`)}
-                        className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
-                      >
-                        View Results
-                      </button>
-                    )}
-                    {a.status === 'failed' && (
-                      <button
-                        onClick={() => navigate(`/gap-analyses/${a.analysis_id}`)}
-                        className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
-                      >
-                        View Results
-                      </button>
-                    )}
-                    {a.status === 'completed' && (
-                      <button
-                        onClick={() => handleArchive(a.analysis_id)}
-                        disabled={actionLoading[a.analysis_id]}
-                        className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[a.analysis_id] ? 'Archiving…' : 'Archive'}
-                      </button>
-                    )}
-                    {a.status === 'archived' && (
-                      <button
-                        onClick={() => handleUnarchive(a.analysis_id)}
-                        disabled={actionLoading[a.analysis_id]}
-                        className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[a.analysis_id] ? 'Restoring…' : 'Unarchive'}
-                      </button>
-                    )}
-                    {a.status === 'failed' && !showArchived && (
-                      <button
-                        onClick={() => handleDelete(a.analysis_id)}
-                        disabled={actionLoading[a.analysis_id]}
-                        className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[a.analysis_id] ? 'Deleting…' : 'Delete'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <NewGapAnalysisModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          onCreated={() => fetchAnalyses(false)}
-        />
+        <button
+          onClick={() => setShowModal(true)}
+          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
+        >
+          + New Analysis
+        </button>
       </div>
+
+      {loading ? (
+        <div className="text-gray-500 text-sm">Loading...</div>
+      ) : analyses.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-lg">No gap analyses yet</p>
+          <p className="text-sm mt-1">Create an analysis to find semantic gaps between datasets</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+          {analyses.map(a => (
+            <Link
+              key={a.analysis_id}
+              to={`/gap-analyses/${a.analysis_id}`}
+              className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+            >
+              <div className="min-w-0">
+                <p className="font-medium text-gray-900 truncate">{a.name}</p>
+                <p className="text-xs text-gray-400 mt-0.5 truncate">
+                  {a.source_dataset_name} → {a.target_dataset_name}
+                  {a.target_is_group && ' (group)'}
+                </p>
+              </div>
+              <div className="flex items-center gap-6 text-sm text-gray-500 shrink-0 ml-4">
+                <span className={`font-medium ${STATUS_COLORS[a.status] || 'text-gray-500'}`}>
+                  {a.status === 'processing' ? '⏳ processing…' : a.status}
+                </span>
+                <span>{a.total_items_analyzed.toLocaleString()} items</span>
+                <span>{new Date(a.created_at).toLocaleDateString()}</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {showModal && (
+        <NewGapAnalysisModal
+          onClose={() => setShowModal(false)}
+          onCreated={() => { setShowModal(false); fetchAnalyses() }}
+        />
+      )}
     </div>
   )
 }
