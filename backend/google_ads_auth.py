@@ -11,6 +11,7 @@ class GoogleAdsAuthManager:
     def __init__(self, config_path: str):
         self.config_path = config_path
         self._client: Optional[GoogleAdsClient] = None
+        self._config: dict = {}
         self._load_client()
 
     # ------------------------------------------------------------------
@@ -26,14 +27,19 @@ class GoogleAdsAuthManager:
             "Request had invalid authentication credentials",
         ))
 
+    def _read_config(self) -> dict:
+        with open(self.config_path, 'r') as f:
+            return yaml.safe_load(f)
+
     def _do_token_refresh(self) -> bool:
         """
-        Exchange the refresh_token for a new access_token and write it back
-        to the config file. Returns True on success.
+        Exchange the refresh_token for a new access_token.
+        Updates self._config in memory (does NOT write back to the file,
+        since /secrets is a read-only Secret Manager mount).
+        Returns True on success.
         """
         try:
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
+            config = self._read_config()
 
             client_id = config.get('client_id')
             client_secret = config.get('client_secret')
@@ -60,11 +66,10 @@ class GoogleAdsAuthManager:
                 print("❌ No access_token in refresh response")
                 return False
 
+            # Update in memory only — /secrets is read-only
             config['access_token'] = new_access_token
-            with open(self.config_path, 'w') as f:
-                yaml.safe_dump(config, f, default_flow_style=False)
-
-            print("✅ Access token refreshed successfully")
+            self._config = config
+            print("✅ Access token refreshed successfully (in-memory)")
             return True
 
         except Exception as e:
@@ -73,14 +78,18 @@ class GoogleAdsAuthManager:
 
     def _load_client(self, after_refresh: bool = False) -> None:
         """
-        Load (or reload) the Google Ads client from the config file.
+        Load (or reload) the Google Ads client.
 
-        If the load fails due to an expired access token and we haven't
-        already tried refreshing, refresh first and retry once.
+        If after_refresh=True, load from self._config (in-memory dict with
+        fresh access_token) rather than from the file, since the file is
+        read-only on Cloud Run.
         """
         try:
-            self._client = GoogleAdsClient.load_from_storage(self.config_path)
-            print(f"✅ Google Ads client loaded from {self.config_path}")
+            if after_refresh and self._config:
+                self._client = GoogleAdsClient.load_from_dict(self._config)
+            else:
+                self._client = GoogleAdsClient.load_from_storage(self.config_path)
+            print(f"✅ Google Ads client loaded")
         except Exception as e:
             if self._is_auth_error(str(e)) and not after_refresh:
                 print(f"⚠️  Access token expired at startup — refreshing...")
