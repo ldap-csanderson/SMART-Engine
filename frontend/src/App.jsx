@@ -8,6 +8,8 @@ import GapAnalysesPage from './pages/GapAnalysesPage'
 import GapAnalysisDetailPage from './pages/GapAnalysisDetailPage'
 import FiltersPage from './pages/FiltersPage'
 import FilterDetailPage from './pages/FilterDetailPage'
+import SettingsPage from './pages/SettingsPage'
+import OAuthCallbackPage from './pages/OAuthCallbackPage'
 
 function App() {
   return (
@@ -24,6 +26,9 @@ function App() {
           <Route path="/gap-analyses/:analysisId" element={<GapAnalysisDetailPage />} />
           <Route path="/filters" element={<FiltersPage />} />
           <Route path="/filters/:filterId" element={<FilterDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          {/* Loaded inside OAuth popup — sends postMessage then closes */}
+          <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
         </Routes>
       </main>
     </div>
