@@ -81,7 +81,7 @@ def _build_prompts_response(d: dict) -> Prompts:
     )
 
 
-@router.get("/prompts/defaults", response_model=Prompts)
+@router.get("/prompts-defaults", response_model=Prompts)
 def get_prompt_defaults():
     """Return the hardcoded default prompts (never reads Firestore)."""
     defaults = _get_defaults()

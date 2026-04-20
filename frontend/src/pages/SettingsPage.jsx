@@ -152,7 +152,7 @@ export default function SettingsPage() {
     try {
       const [currentRes, defaultsRes] = await Promise.all([
         fetch(`${API_BASE}/api/settings/prompts`),
-        fetch(`${API_BASE}/api/settings/prompts/defaults`),
+        fetch(`${API_BASE}/api/settings/prompts-defaults`),
       ])
       const current = await currentRes.json()
       const defs = await defaultsRes.json()
