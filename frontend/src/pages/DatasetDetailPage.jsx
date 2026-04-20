@@ -26,6 +26,11 @@ export default function DatasetDetailPage() {
   const [loading, setLoading] = useState(true)
   const [itemsLoading, setItemsLoading] = useState(false)
 
+  // Delete confirmation state
+  const [deleteModal, setDeleteModal] = useState(false)
+  const [affectedGroups, setAffectedGroups] = useState([])
+  const [deleting, setDeleting] = useState(false)
+
   const fetchDataset = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/datasets/${datasetId}`)
@@ -79,10 +84,39 @@ export default function DatasetDetailPage() {
     setDataset(d => ({ ...d, name: newName }))
   }
 
-  const handleDelete = async () => {
-    if (!confirm('Delete this dataset and all its items? This cannot be undone.')) return
-    await fetch(`${API_BASE}/api/datasets/${datasetId}`, { method: 'DELETE' })
-    navigate('/datasets')
+  const handleDeleteClick = async () => {
+    // Check group membership first
+    try {
+      const res = await fetch(`${API_BASE}/api/datasets/${datasetId}/groups`)
+      const data = await res.json()
+      const groups = data.groups || []
+      if (groups.length === 0) {
+        // No groups — simple browser confirm
+        if (!confirm('Delete this dataset and all its items? This cannot be undone.')) return
+        await confirmDelete()
+      } else {
+        // Show warning modal listing affected groups
+        setAffectedGroups(groups)
+        setDeleteModal(true)
+      }
+    } catch (e) {
+      console.error(e)
+      // Fall back to simple confirm on error
+      if (!confirm('Delete this dataset and all its items? This cannot be undone.')) return
+      await confirmDelete()
+    }
+  }
+
+  const confirmDelete = async () => {
+    setDeleting(true)
+    try {
+      await fetch(`${API_BASE}/api/datasets/${datasetId}`, { method: 'DELETE' })
+      navigate('/datasets')
+    } catch (e) {
+      console.error(e)
+      setDeleting(false)
+      setDeleteModal(false)
+    }
   }
 
   if (loading) return <div className="p-8 text-gray-500">Loading…</div>
@@ -115,7 +149,7 @@ export default function DatasetDetailPage() {
           )}
         </div>
         <button
-          onClick={handleDelete}
+          onClick={handleDeleteClick}
           className="text-sm text-red-500 hover:text-red-700 border border-red-200 px-3 py-1.5 rounded-lg"
         >
           Delete
@@ -185,6 +219,46 @@ export default function DatasetDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Delete confirmation modal — shown when dataset is in one or more groups */}
+      {deleteModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Delete dataset?</h2>
+            <p className="text-sm text-gray-600 mb-3">
+              <strong className="text-gray-800">{dataset.name}</strong> belongs to the following
+              group{affectedGroups.length > 1 ? 's' : ''}:
+            </p>
+            <ul className="mb-4 space-y-1">
+              {affectedGroups.map(g => (
+                <li key={g.group_id} className="text-sm text-gray-700 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                  {g.name}
+                </li>
+              ))}
+            </ul>
+            <p className="text-sm text-gray-500 mb-6">
+              Deleting this dataset will remove it from {affectedGroups.length > 1 ? 'those groups' : 'that group'} and permanently delete all its items. This cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteModal(false)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg disabled:opacity-50"
+              >
+                {deleting ? 'Deleting…' : 'Delete anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

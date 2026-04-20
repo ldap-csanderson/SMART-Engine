@@ -773,9 +773,25 @@ def unarchive_dataset(dataset_id: str):
     return {"message": f"Dataset {dataset_id} unarchived", "dataset_id": dataset_id}
 
 
+@router.get("/{dataset_id}/groups")
+def get_dataset_groups_membership(dataset_id: str):
+    """Return all dataset groups that contain this dataset."""
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    if not db.collection("datasets").document(dataset_id).get().exists:
+        raise HTTPException(404, f"Dataset {dataset_id} not found")
+    groups = []
+    for doc in db.collection("dataset_groups").stream():
+        d = doc.to_dict()
+        if dataset_id in d.get("dataset_ids", []):
+            groups.append({"group_id": d["group_id"], "name": d["name"]})
+    return {"groups": groups}
+
+
 @router.delete("/{dataset_id}")
 def delete_dataset(dataset_id: str):
-    """Delete a dataset from Firestore and its items from BigQuery."""
+    """Delete a dataset from Firestore and its items from BigQuery.
+    Also removes the dataset from any groups it belongs to."""
     if not db:
         raise HTTPException(503, "Firestore not initialized")
     ref = db.collection("datasets").document(dataset_id)
@@ -800,4 +816,20 @@ def delete_dataset(dataset_id: str):
             print(f"⚠️ Could not delete BQ embeddings for dataset {dataset_id}: {e}")
 
     ref.delete()
+
+    # Cascade: remove dataset_id from any groups that contain it
+    try:
+        for doc in db.collection("dataset_groups").stream():
+            d = doc.to_dict()
+            ids = d.get("dataset_ids", [])
+            if dataset_id in ids:
+                new_ids = [i for i in ids if i != dataset_id]
+                doc.reference.update({
+                    "dataset_ids": new_ids,
+                    "updated_at": firestore.SERVER_TIMESTAMP,
+                })
+                print(f"✅ Removed dataset {dataset_id} from group {d['group_id']}")
+    except Exception as e:
+        print(f"⚠️ Could not cascade-remove dataset {dataset_id} from groups: {e}")
+
     return {"message": f"Dataset {dataset_id} deleted", "dataset_id": dataset_id}
