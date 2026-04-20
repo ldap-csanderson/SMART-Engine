@@ -1,199 +1,225 @@
-# Multiple Portfolios Deployment Guide
+# SMART Engine — Deployment Guide
 
-**Branch:** `feature/multiple-portfolios`  
-**Date:** March 16, 2026
-
-## Overview
-
-This deployment introduces support for multiple portfolios with immutable snapshots in gap analyses. The migration requires careful orchestration of database changes and data migration.
+**GCP Project:** `csanderson-experimental-443821`  
+**Region:** `us-central1`  
+**Cloud Run Service:** `smart-engine`  
+**Live URL:** https://smart-engine-xdzhjknata-uc.a.run.app
 
 ---
 
-## Pre-Deployment Checklist
+## How Deployment Works
 
-- [ ] All code committed to `feature/multiple-portfolios` branch
-- [ ] Code review completed (if applicable)
-- [ ] Terraform changes reviewed
-- [ ] Migration script tested with `--dry-run`
-- [ ] Firestore backup taken
+`deploy.sh` does three things in order:
+
+1. **`terraform apply`** — provisions/updates all GCP infrastructure (BQ tables, Firestore indexes, IAM, Cloud Run service config)
+2. **`gcloud builds submit`** — builds the Docker image (React frontend + FastAPI backend in one container) and pushes to Artifact Registry
+3. **`terraform apply`** again — updates the Cloud Run service to use the new image tag
+
+The image is always tagged `:latest`. Cloud Run creates a new revision on each deploy and shifts 100% of traffic to it automatically.
 
 ---
 
-## Deployment Steps
+## First-Time Setup
 
-### Step 1: Merge to Main Branch
+### Prerequisites
+
+- `gcloud` CLI authenticated: `gcloud auth login`
+- Application Default Credentials: `gcloud auth application-default login`
+- Terraform ≥ 1.0 installed
+- `scripts/google-ads.yaml` populated with valid OAuth credentials (see README)
+
+### 1. Upload the Google Ads Secret
+
+The Google Ads YAML is stored in Secret Manager and mounted read-only into Cloud Run at `/secrets/google-ads.yaml`.
 
 ```bash
-git checkout main
-git merge feature/multiple-portfolios
-git push origin main
+# First time: create the secret
+gcloud secrets create google-ads-yaml \
+  --data-file=scripts/google-ads.yaml \
+  --replication-policy=automatic \
+  --project=csanderson-experimental-443821
 ```
 
-### Step 2: Deploy Terraform (Create V2 Tables)
-
-This creates the new BigQuery tables with `portfolio_id` support:
+### 2. Initialize Terraform
 
 ```bash
 cd terraform
-terraform plan  # Review changes
-terraform apply  # Apply when ready
+terraform init
 ```
 
-**Expected Changes:**
-- New table: `portfolio_items_v2`
-- New table: `portfolio_embeddings_v2`
-- Old tables remain untouched
+### 3. Handle Pre-Existing Resources
 
-### Step 3: Deploy Application Code
-
-Deploy the new application code:
+If GCP resources already exist (from a previous deploy or manual creation), Terraform will error with 409 conflicts. Import them before applying:
 
 ```bash
-cd /Users/csanderson/code/people/gap_analysis_v2
+cd terraform
+
+# Artifact Registry repo
+terraform import google_artifact_registry_repository.app \
+  projects/csanderson-experimental-443821/locations/us-central1/repositories/app
+
+# Firestore database
+terraform import google_firestore_database.database \
+  projects/csanderson-experimental-443821/databases/(default)
+
+# Secret Manager secret
+terraform import google_secret_manager_secret.google_ads_yaml \
+  projects/csanderson-experimental-443821/secrets/google-ads-yaml
+```
+
+### 4. Deploy
+
+```bash
+chmod +x deploy.sh
 ./deploy.sh
 ```
 
-**This will:**
-- Build new Docker image with multiple portfolio support
-- Deploy to Cloud Run
-- Old portfolio data will still be queryable via old endpoint temporarily
-
-### Step 4: Run Migration Script
-
-**IMPORTANT:** Test with dry-run first!
-
-```bash
-# DRY RUN - Preview changes
-cd /Users/csanderson/code/people/gap_analysis_v2
-python3 scripts/migrate_to_multiple_portfolios.py --dry-run
-
-# LIVE RUN - Apply changes (after reviewing dry-run output)
-python3 scripts/migrate_to_multiple_portfolios.py
-```
-
-**What the migration does:**
-1. Reads existing `portfolio/default` from Firestore
-2. Creates new portfolio named "Default Portfolio" in `portfolios` collection
-3. Syncs items to BigQuery `portfolio_items_v2` table
-4. Backfills all existing gap_analyses with:
-   - `portfolio_id` field
-   - `portfolio_snapshot` object (immutable copy)
-5. Deletes old `portfolio/default` document
-
-### Step 5: Verify Migration
-
-**Check Firestore:**
-```bash
-# Verify new portfolio exists
-gcloud firestore documents list portfolios --project=gap-analysis-nlf
-
-# Verify old portfolio is gone
-gcloud firestore documents list portfolio --project=gap-analysis-nlf
-```
-
-**Check BigQuery:**
-```sql
--- Verify items in v2 table
-SELECT COUNT(*) FROM `gap-analysis-nlf.keyword_planner_data.portfolio_items_v2`;
-
--- Check gap_analyses have portfolio_snapshot
-SELECT analysis_id, name, portfolio_id 
-FROM `gap-analysis-nlf.keyword_planner_data.gap_analysis_results`
-LIMIT 5;
-```
-
-**Check Application:**
-1. Visit: https://gap-analysis-nbauychn5a-uc.a.run.app/portfolios
-2. Verify "Default Portfolio" is visible
-3. Try creating a new portfolio
-4. Try creating a gap analysis with portfolio selection
+First deployment takes ~5-10 minutes (API enablement, BQ model creation, image build).
 
 ---
 
-## Rollback Plan
+## Routine Updates
 
-If something goes wrong:
-
-### Rollback Application Code
+After making code changes:
 
 ```bash
-git checkout main
-git revert HEAD  # or checkout previous commit
 ./deploy.sh
 ```
 
-### Restore Firestore Data
+This rebuilds the image and deploys a new Cloud Run revision. Takes ~3-4 minutes.
+
+---
+
+## Updating the Google Ads Secret
+
+When OAuth tokens expire or credentials change:
 
 ```bash
-# If you took a backup before migration
-gcloud firestore import gs://YOUR_BACKUP_BUCKET/BACKUP_PATH --project=gap-analysis-nlf
+# Add a new secret version (Cloud Run always uses "latest")
+gcloud secrets versions add google-ads-yaml \
+  --data-file=scripts/google-ads.yaml \
+  --project=csanderson-experimental-443821
+
+# Force a new Cloud Run revision to pick up the new secret
+gcloud run services update smart-engine \
+  --region=us-central1 \
+  --project=csanderson-experimental-443821
+
+# Verify Google Ads is connected
+curl -s https://smart-engine-xdzhjknata-uc.a.run.app/api/health | jq .
 ```
 
-### Keep Both Table Versions
-
-The old `portfolio_items` and `portfolio_embeddings` tables are kept for safety. Don't delete them until you've verified the new system works perfectly for at least a week.
+**Note:** Cloud Run mounts secret versions as files. Updating a secret version does **not** automatically restart the service — you must force a new revision as shown above.
 
 ---
 
-## Post-Deployment Tasks
+## Changing the Customer ID
 
-- [ ] Verify all existing gap analyses display correctly
-- [ ] Create a test portfolio
-- [ ] Run a test gap analysis with new portfolio
-- [ ] Monitor Cloud Run logs for errors
-- [ ] After 1-2 weeks of stable operation, consider deleting old v1 tables
+The Google Ads customer ID is set in `backend/config.yaml`:
 
----
+```yaml
+google_ads:
+  customer_id: "2900871247"
+```
 
-## What Changed
-
-### Backend
-- **New API:** `/api/portfolios` (CRUD for multiple portfolios)
-- **Updated API:** `/api/gap-analyses` now requires `portfolio_id`
-- **New Tables:** `portfolio_items_v2`, `portfolio_embeddings_v2`
-- **Snapshot Storage:** Gap analyses now store immutable portfolio snapshots
-
-### Frontend
-- **New Pages:** `/portfolios` (list), `/portfolios/:id` (detail)
-- **Updated:** Gap analysis creation modal now requires portfolio selection
-- **Updated:** Gap analysis detail page shows portfolio snapshot info
-
-### Database Schema
-- **Firestore:** New `portfolios` collection (plural), old `portfolio` deleted
-- **BigQuery:** New v2 tables with `portfolio_id` column for multi-portfolio isolation
-- **Gap Analyses:** Now include `portfolio_id` and `portfolio_snapshot` fields
+To change it: update `config.yaml`, then run `./deploy.sh` to rebuild and redeploy.
 
 ---
 
-## Known Issues / Limitations
+## Infrastructure Overview
 
-1. **Embedding Cache Reset:** The migration creates new v2 tables from scratch, so all cached embeddings are lost. First gap analysis on each portfolio will be slower as it regenerates embeddings.
+All infrastructure is managed by Terraform in `terraform/`:
 
-2. **No Migration of Old Embeddings:** For simplicity, we chose not to migrate the old embedding cache. Future improvement could copy relevant embeddings to v2 tables.
+| Resource | Name |
+|---|---|
+| Cloud Run service | `smart-engine` |
+| Service account | `smart-engine-app@csanderson-experimental-443821.iam.gserviceaccount.com` |
+| Artifact Registry | `us-central1-docker.pkg.dev/csanderson-experimental-443821/app` |
+| BQ dataset | `smart_engine_data` (us-central1) |
+| BQ tables | `dataset_items`, `dataset_embeddings`, `gap_analysis_results`, `filter_results` |
+| BQ connection | `us-central1.vertex-ai-connection` (for BQ ML → Vertex AI) |
+| Firestore | `(default)` database |
+| Secret | `google-ads-yaml` |
 
-3. **Portfolio Deletion:** Currently doesn't check if gap analyses reference a portfolio before deletion. Consider adding a safety check if needed.
+### IAM Roles (service account)
+
+- `roles/bigquery.user`
+- `roles/bigquery.dataEditor`
+- `roles/bigquery.jobUser`
+- `roles/bigquery.connectionUser`
+- `roles/datastore.user`
+- `roles/aiplatform.user`
+- `roles/secretmanager.secretAccessor`
 
 ---
 
-## Testing Performed
+## Terraform State
 
-- [ ] Dry-run migration successful
-- [ ] Local development server runs without errors
-- [ ] Can create new portfolio via UI
-- [ ] Can edit portfolio via UI
-- [ ] Can delete portfolio via UI
-- [ ] Can create gap analysis with portfolio selection
-- [ ] Portfolio snapshot displays correctly in gap analysis detail
-- [ ] Migration script completes successfully in production
-- [ ] All existing gap analyses still accessible
+Terraform state is stored **locally** in `terraform/terraform.tfstate`. This file is gitignored. Keep it safe — losing it means you'll need to re-import existing resources.
+
+If you're working from a new machine and the state file is missing, import existing resources as shown in the First-Time Setup section above.
 
 ---
 
-## Support
+## Troubleshooting
 
-If issues arise, check:
-- Cloud Run logs: `gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=gap-analysis" --limit=50 --project=gap-analysis-nlf`
-- Application health: `curl https://gap-analysis-nbauychn5a-uc.a.run.app/api/health`
-- BigQuery table data via Cloud Console
+### View logs
 
-For questions or issues, refer to `IMPLEMENTATION_PLAN.md` for architecture details.
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="smart-engine"' \
+  --project=csanderson-experimental-443821 \
+  --limit=50 \
+  --format="value(textPayload)"
+```
+
+### Health check
+
+```bash
+curl -s https://smart-engine-xdzhjknata-uc.a.run.app/api/health | jq .
+```
+
+Expected when fully operational:
+```json
+{
+  "status": "healthy",
+  "google_ads_connected": true,
+  "bigquery_connected": true,
+  "firestore_connected": true
+}
+```
+
+### Describe Cloud Run service
+
+```bash
+gcloud run services describe smart-engine \
+  --region=us-central1 \
+  --project=csanderson-experimental-443821
+```
+
+### Common Issues
+
+**`google_ads_connected: false`**  
+The Google Ads secret is missing, expired, or has an `invalid_grant` error. Update the secret and force a new revision (see "Updating the Google Ads Secret" above).
+
+**Container fails to start**  
+Check logs for Python import errors or missing config. Common causes:
+- `config.yaml` references a table/key that doesn't exist
+- Python import error (check `routers/` for stale v2 imports)
+
+**Terraform 409 conflicts on first apply**  
+Resources exist in GCP but not in Terraform state. Import them (see "Handle Pre-Existing Resources" above).
+
+**Cloud Run "image not found" on first apply**  
+Terraform tries to deploy the Cloud Run service before the image is built. Run the full `./deploy.sh` script — it handles the correct ordering (terraform → build → terraform).
+
+---
+
+## Cleanup
+
+```bash
+cd terraform
+terraform destroy
+```
+
+⚠️ Permanently deletes all infrastructure including BigQuery data and Firestore documents.

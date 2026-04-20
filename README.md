@@ -1,297 +1,252 @@
-# Gap Analysis
+# SMART Engine
 
-A full-stack application that identifies content gaps between keyword reports and your portfolio, using Google Ads Keyword Planner + BigQuery ML (Gemini + text embeddings).
+A full-stack semantic gap analysis platform. Compares any pair of data sources — keyword planner results, ad copy, search terms, or custom text lists — using Google Ads API + BigQuery ML (Gemini + text embeddings) to find what's missing from your coverage.
+
+**Live:** https://smart-engine-xdzhjknata-uc.a.run.app  
+**Repo:** git@github.com:ldap-csanderson/SMART-Engine.git  
+**GCP Project:** `csanderson-experimental-443821`
+
+---
 
 ## Architecture
 
 ```
-gap_analysis_v2/
+gap_analysis_v3/
 ├── backend/          # FastAPI — modular routers, Firestore + BigQuery
 ├── frontend/         # React + Tailwind CSS SPA
-├── terraform/        # GCP infrastructure (BigQuery, Firestore, Vertex AI)
-└── scripts/          # Standalone Google Ads fetch scripts
+├── terraform/        # GCP infrastructure
+├── scripts/          # Standalone Google Ads scripts (local use)
+└── SPEC.md           # Full v3 feature specification
+```
+
+### Single-Container Deployment
+
+Frontend (React) is built at Docker build time and served as static files by the FastAPI backend via Uvicorn. There is **one** Cloud Run service (`smart-engine`) serving both the API (`/api/*`) and the frontend.
+
+```
+Browser
+  ↓
+Cloud Run: smart-engine (port 8000)
+  ├── GET /api/* → FastAPI routers
+  └── GET /* → React SPA (static/index.html)
 ```
 
 ### Data Flow
 
 ```
-1. Keyword Report
-   Google Ads Keyword Planner API
-       ↓ (background task)
-   Firestore: keyword_reports  ←→  BigQuery: keyword_results
-   (metadata + status)              (all keyword rows, run_id FK)
+1. Dataset Ingestion
+   Google Ads API (Keyword Planner / Ad Copy / Search Terms)
+     ↓ (background task on POST /api/datasets)
+   Firestore: datasets  ←→  BigQuery: dataset_items
+   (metadata + status)       (all item rows, dataset_id FK)
 
-2. Gap Analysis
-   BigQuery ML pipeline (bq_ml.py)
-   ├── Step 1: ML.GENERATE_TEXT  → keyword intent strings (Gemini)
-   ├── Step 2: ML.GENERATE_EMBEDDING → keyword embeddings
-   ├── Step 3: ML.GENERATE_EMBEDDING → portfolio embeddings (cached by prompt hash)
-   └── Step 4: ML.DISTANCE (cosine) → closest portfolio match per keyword
+2. Gap Analysis Pipeline (bq_ml.py)
+   ├── Step 1: ML.GENERATE_TEXT  → source item intent strings (Gemini)
+   ├── Step 2: ML.GENERATE_EMBEDDING → source embeddings
+   ├── Step 3: ML.GENERATE_EMBEDDING → target embeddings (cached in dataset_embeddings)
+   └── Step 4: VECTOR_SEARCH (cosine) → top-3 closest target items per source item
        ↓
    BigQuery: gap_analysis_results
-   (analysis_id, keyword_text, keyword_intent, closest_portfolio_item,
-    closest_portfolio_intent, semantic_distance, avg_monthly_searches)
 
 3. Filter Executions (optional, post-analysis)
-   BigQuery ML pipeline (bq_ml.py)
-   └── ML.GENERATE_TEXT → boolean classification per keyword per filter
-       ↓
+   ML.GENERATE_TEXT → boolean classification per item per filter
+     ↓
    BigQuery: filter_results
-   (execution_id, analysis_id, keyword_text, label, result BOOL, confidence)
-   
-   Firestore: filter_executions
-   (snapshot of filter state at execution time — immutable after run)
 ```
 
 ### Storage Split
 
 | Layer | Technology | Contents |
 |---|---|---|
-| Metadata | Firestore | Reports, analyses, filters, filter_executions, portfolio, settings |
-| Analytics | BigQuery | keyword_results, portfolio_items/embeddings, gap_analysis_results, filter_results |
+| Metadata | Firestore | `datasets`, `dataset_groups`, `gap_analyses`, `filters`, `filter_executions`, `settings` |
+| Analytics | BigQuery (`smart_engine_data`) | `dataset_items`, `dataset_embeddings`, `gap_analysis_results`, `filter_results` |
 
-Firestore is used for metadata because it supports instant deletes/updates without BigQuery streaming buffer delays. BigQuery is used for keyword data because it handles millions of rows with SQL and ML functions.
-
-### Immutability Design
-
-All analysis results are designed to be immutable with respect to their inputs:
-- **Keyword Reports** — BQ rows are never modified after write; archive/unarchive only changes metadata
-- **Gap Analysis** — `closest_portfolio_item` and `closest_portfolio_intent` are written as literal strings at run time; portfolio changes don't affect existing results
-- **Filter Executions** — the filter's `name`, `label`, and `text` are snapshotted into Firestore at run time; editing the live filter doesn't affect past executions
+---
 
 ## Features
 
-- **Keyword Reports** — fetch keyword ideas for a list of URLs via Google Ads Keyword Planner; results written to both Firestore (metadata) and BigQuery (rows)
-- **Gap Analysis** — 5-step BigQuery ML pipeline using Gemini Flash + text-embedding-005 to find which keywords are semantically furthest from your portfolio; can optionally chain filter executions on completion
-- **Portfolio embedding cache** — portfolio items are re-embedded only when the prompt changes (keyed by SHA-256 hash of the prompt)
-- **Filters** — LLM-evaluated boolean classifiers (e.g. `purchase_intent`, `non_branded`, `affiliate_suitable`); each filter has a natural language `text` description that instructs Gemini to return `{label: true/false, confidence: "high/medium/low"}`
-- **Filter Executions** — run any filter against a completed gap analysis; results stored in BQ with the filter snapshot preserved; apply multiple filters at query time with AND logic
-- **Portfolio** — manage portfolio content items used as the "known" side of gap analysis
-- **Settings** — customise Gemini prompts for keyword-to-intent and portfolio-to-intent transformations
+- **Datasets** — pull keywords (URL-seeded or account-level), ad copy, search terms from Google Ads, or enter a custom text list. All types produce a flat list of text items that feed into gap analysis.
+- **Dataset Groups** — named collections of datasets; use a group as either side of a gap analysis to union all member items.
+- **Gap Analysis** — BigQuery ML pipeline using Gemini Flash + text-embedding-005 to find which source items are semantically furthest from the target dataset/group.
+- **Intent caching** — target embeddings are cached in `dataset_embeddings` keyed by `(dataset_id, item_text, prompt_hash)`. Re-running analysis against the same target skips regeneration.
+- **Filters** — LLM boolean classifiers run against gap analysis results (`purchase_intent`, `non_branded`, etc.). Results stored with filter snapshot for immutability.
+- **Per-type intent prompts** — each dataset type (keywords, ad copy, search terms, text list) has a tailored Gemini prompt. Overridable per-type via the Settings page.
 
-## Prerequisites
+---
 
-- Python 3.11+
-- Node.js 20+
-- Google Cloud SDK (`gcloud`)
-- Terraform ≥ 1.0
-- GCP project with billing enabled
-- Google Ads Developer Token + `scripts/google-ads.yaml`
+## Configuration
 
-## Google Ads Authentication
+### `backend/config.yaml`
 
-The application uses OAuth 2.0 for Google Ads API access with automatic token refresh. Your `google-ads.yaml` must include:
+All server-side configuration lives here. It is **not a secret** — it contains no credentials.
+
+```yaml
+gcp:
+  project_id: "csanderson-experimental-443821"
+  region: "us-central1"
+
+bigquery:
+  dataset: "smart_engine_data"
+  connection: "us-central1.vertex-ai-connection"
+  tables:
+    dataset_items: "dataset_items"
+    dataset_embeddings: "dataset_embeddings"
+    gap_analysis_results: "gap_analysis_results"
+    filter_results: "filter_results"
+  models:
+    gemini_flash: "gemini-flash"
+    text_embeddings: "text-embeddings"
+
+google_ads:
+  customer_id: "2900871247"   # ← The Google Ads customer ID used for all API calls
+  config_path: "../scripts/google-ads.yaml"  # local dev only; Cloud Run uses Secret Manager
+
+api:
+  max_retries: 3
+  retry_delay_seconds: 5
+```
+
+**`google_ads.customer_id`** — this is the CID passed to the Google Ads API for all dataset ingestion calls. It is injected server-side into `source_config` on dataset creation, so the frontend never needs to know it. To change the customer account, update this value and redeploy.
+
+### `scripts/google-ads.yaml` (secret — never commit)
+
+OAuth credentials for the Google Ads API. On Cloud Run, this is mounted read-only from Secret Manager at `/secrets/google-ads.yaml`.
 
 ```yaml
 client_id: "YOUR_CLIENT_ID"
 client_secret: "YOUR_CLIENT_SECRET"
 refresh_token: "YOUR_REFRESH_TOKEN"
-access_token: "YOUR_ACCESS_TOKEN"  # Auto-updated when expired
+access_token: "YOUR_ACCESS_TOKEN"
 developer_token: "YOUR_DEVELOPER_TOKEN"
-login_customer_id: "YOUR_CUSTOMER_ID"
+login_customer_id: "YOUR_LOGIN_CUSTOMER_ID"
+use_proto_plus: true
 ```
 
-**Token Refresh:** When the access token expires (typically after 1 hour), the system automatically refreshes it using the refresh token and retries failed requests. The refresh token is long-lived and doesn't expire unless revoked. This prevents daily authentication failures in your keyword reports.
-
-## Deployment Options
-
-This application can be deployed in two ways:
-
-1. **Cloud Run (GCP)** - Recommended for easy deployment with auto-scaling
-2. **Local/VPS** - For development or self-hosted environments
+**Token refresh:** When the access token expires, `google_ads_auth.py` automatically exchanges the refresh token for a new access token in memory (does not write back to file, since `/secrets` is read-only on Cloud Run).
 
 ---
 
-## Cloud Run Deployment (Production)
+## Dataset Types
 
-Deploy both frontend and backend to Google Cloud Run with a single command.
+| Type | Description | Source |
+|---|---|---|
+| `google_ads_keywords` | Keyword Planner results seeded by URLs | Google Ads KeywordPlanIdeaService |
+| `google_ads_ad_copy` | RSA + ETA ad copy from an account | Google Ads AdService |
+| `google_ads_search_terms` | Search terms report | Google Ads search_term_view |
+| `google_ads_keyword_planner` | Keyword Planner at account level (no URL seed) | Google Ads KeywordPlanIdeaService |
+| `text_list` | Manually entered text strings | User input |
 
-### Prerequisites
+Only `google_ads_keywords` and `google_ads_keyword_planner` produce search volume enrichment columns (`avg_monthly_searches`, `competition`, CPC bids).
 
-- `gcloud` CLI authenticated: `gcloud auth login`
-- `gcloud` configured for billing account
-- Project ID: `gap-analysis-nlf` (or update in `deploy.sh` and `terraform/variables.tf`)
+---
 
-### Initial Setup (One-Time)
+## API Routes
 
-#### 1. Upload Google Ads Config to Secret Manager
+### Datasets
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/datasets` | List all datasets |
+| `POST` | `/api/datasets` | Create dataset (triggers background ingestion) |
+| `GET` | `/api/datasets/{id}` | Get dataset metadata |
+| `GET` | `/api/datasets/{id}/items` | Paginated items from BigQuery |
+| `PATCH` | `/api/datasets/{id}/rename` | Rename |
+| `PATCH` | `/api/datasets/{id}/archive` | Archive |
+| `PATCH` | `/api/datasets/{id}/unarchive` | Unarchive |
+| `DELETE` | `/api/datasets/{id}` | Delete + BQ rows |
+| `GET` | `/api/datasets/accounts` | List accessible Google Ads accounts |
 
-```bash
-gcloud secrets create google-ads-yaml \
-  --data-file=scripts/google-ads.yaml \
-  --replication-policy=automatic \
-  --project=gap-analysis-nlf
+### Dataset Groups
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/dataset-groups` | List all groups |
+| `POST` | `/api/dataset-groups` | Create group |
+| `GET` | `/api/dataset-groups/{id}` | Get group |
+| `PUT` | `/api/dataset-groups/{id}` | Update (name + members) |
+| `DELETE` | `/api/dataset-groups/{id}` | Delete group (not members) |
+
+### Gap Analyses
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/gap-analyses` | Run analysis |
+| `POST` | `/api/gap-analyses/estimate` | Cost estimate for a source dataset |
+| `GET` | `/api/gap-analyses` | List analyses |
+| `GET` | `/api/gap-analyses/{id}` | Get analysis |
+| `GET` | `/api/gap-analyses/{id}/results` | Paginated results |
+| `PATCH` | `/api/gap-analyses/{id}/rename` | Rename |
+| `PATCH` | `/api/gap-analyses/{id}/archive` | Archive |
+| `DELETE` | `/api/gap-analyses/{id}` | Delete |
+
+### Filters & Executions
+| Method | Path | Description |
+|---|---|---|
+| `GET/POST` | `/api/filters` | List / create |
+| `GET/PUT/DELETE` | `/api/filters/{id}` | Manage filter |
+| `POST` | `/api/gap-analyses/{id}/filter-executions` | Run filters |
+| `GET` | `/api/gap-analyses/{id}/filter-executions` | List executions |
+| `DELETE` | `/api/gap-analyses/{id}/filter-executions/{exec_id}` | Delete execution |
+
+### Other
+| Method | Path | Description |
+|---|---|---|
+| `GET/PUT` | `/api/settings/prompts` | Per-type Gemini prompt overrides |
+| `GET` | `/api/health` | Connection status |
+
+---
+
+## BigQuery Schema (`smart_engine_data`)
+
+| Table | Key Columns |
+|---|---|
+| `dataset_items` | `dataset_id`, `item_text`, `added_at`, `avg_monthly_searches`, `competition`, `competition_index`, `low/high_top_of_page_bid_usd`, `source_url` |
+| `dataset_embeddings` | `dataset_id`, `item_text`, `intent_string`, `embedding` (FLOAT64[]), `prompt_hash`, `embedded_at` |
+| `gap_analysis_results` | `analysis_id`, `keyword_text`, `keyword_intent`, `closest_portfolio_item`, `closest_portfolio_intent`, `semantic_distance`, `avg_monthly_searches` |
+| `filter_results` | `execution_id`, `analysis_id`, `keyword_text`, `label`, `result` (BOOL), `confidence`, `created_at` |
+
+### BQ ML Models
+
+| Model | Endpoint | Used for |
+|---|---|---|
+| `gemini-flash` | `gemini-2.5-flash` | Intent string generation + filter boolean classification |
+| `text-embeddings` | `text-embedding-005` | Semantic embeddings (512-dim, SEMANTIC_SIMILARITY) |
+
+Models are created at startup via `CREATE MODEL IF NOT EXISTS`.
+
+---
+
+## Code Structure
+
 ```
+backend/
+├── api.py               # FastAPI app, lifespan startup, static file serving
+├── db.py                # Shared clients (GA, BQ, Firestore) + constants
+├── bq_ml.py             # BQ ML pipeline: gap analysis, filter execution, intent prompts
+├── config.yaml          # GCP project, table names, customer_id, API settings
+├── google_ads_auth.py   # OAuth token refresh (in-memory, /secrets is read-only)
+├── requirements.txt
+└── routers/
+    ├── datasets.py         # /api/datasets — CRUD + background ingestion for all types
+    ├── dataset_groups.py   # /api/dataset-groups
+    ├── gap_analysis.py     # /api/gap-analyses — pipeline + results query
+    ├── filter_executions.py
+    ├── filters.py
+    └── settings.py         # /api/settings/prompts — per-type prompt overrides
 
-This secret is automatically mounted to the backend Cloud Run container at `/secrets/google-ads.yaml`.
-
-#### 2. Enable Required APIs
-
-```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
+frontend/src/
+├── App.jsx              # Routes: /datasets, /dataset-groups, /gap-analyses, /filters
+└── pages/
+    ├── DatasetsPage.jsx
+    ├── DatasetDetailPage.jsx
+    ├── DatasetGroupsPage.jsx
+    ├── DatasetGroupDetailPage.jsx
+    ├── GapAnalysesPage.jsx
+    └── GapAnalysisDetailPage.jsx
 ```
-
-Creates:
-- BigQuery dataset/tables
-- Firestore database + composite indexes
-- Vertex AI connection
-- Artifact Registry for Docker images
-- Secret Manager configuration
-- Service accounts with IAM permissions
-
-#### 3. Deploy Application
-
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-The script will:
-1. Build backend Docker image and push to Artifact Registry
-2. Build frontend Docker image (with backend URL baked in) and push to Artifact Registry
-3. Deploy both services to Cloud Run via Terraform
-4. Display service URLs
-
-**Initial deployment takes ~5-10 minutes.** Subsequent deployments take ~2-3 minutes.
-
-### Accessing Your Deployment
-
-After deployment completes, you'll see:
-
-```
-✅ Deployment complete!
-
-📋 Service URLs:
-   Frontend: https://gap-analysis-frontend-xxxxx-uc.a.run.app
-   Backend:  https://gap-analysis-backend-xxxxx-uc.a.run.app
-```
-
-Visit the frontend URL in your browser.
-
-### Updating the Application
-
-After making code changes, simply run:
-
-```bash
-./deploy.sh
-```
-
-Cloud Run will:
-- Build new images
-- Deploy with zero downtime
-- Switch traffic automatically
-
-### Architecture
-
-```
-┌─────────────────────┐
-│ Cloud Run (Frontend)│
-│  Nginx + React SPA  │
-└──────────┬──────────┘
-           │
-           ↓ (calls /api/*)
-┌─────────────────────┐
-│ Cloud Run (Backend) │
-│  FastAPI + uvicorn  │
-│  min/max: 1 instance│
-└──────────┬──────────┘
-           │
-           ↓ (uses)
-┌─────────────────────────────────┐
-│ GCP Services                    │
-│ • BigQuery (analytics data)     │
-│ • Firestore (metadata)          │
-│ • Vertex AI (Gemini + embeddings)│
-│ • Secret Manager (google-ads.yaml)│
-└─────────────────────────────────┘
-```
-
-#### API Routing
-
-The frontend uses `/api/*` URLs while the backend serves from root (`/keyword-reports`, not `/api/keyword-reports`). This is handled through a **dual-layer approach**:
-
-1. **JavaScript Fetch Interceptor** (`frontend/src/config.js`):
-   - Overrides `window.fetch` to rewrite `/api/*` → `VITE_API_URL/*`
-   - Enables flexible backend URLs (localhost in dev, Cloud Run in prod)
-   - Injected via `import './config'` in `main.jsx`
-
-2. **Nginx Proxy** (`frontend/nginx.conf`):
-   - Proxies `/api/*` → `backend/*` (strips prefix)
-   - Enables direct API testing via curl/Postman
-   - Configured with hardcoded backend URL for production
-
-This approach requires **zero code changes** across 34 fetch calls in the React app!
-
-**Key Design Decisions:**
-- Both services run with `min_instance_count = 1` and `max_instance_count = 1`
-- Single instance ensures background tasks complete without interruption
-- Backend uses FastAPI BackgroundTasks (no Celery/Redis needed)
-- Secrets mounted as volume from Secret Manager
-- CORS configured for Cloud Run URLs
-
-### Cost Estimate
-
-With min/max = 1 instance (always running):
-- **Cloud Run**: ~$20-30/month (2 vCPU backend + 1 vCPU frontend, idle most of the time)
-- **BigQuery**: Pay per query (existing cost)
-- **Firestore**: Free tier covers typical usage
-- **Artifact Registry**: ~$0.10/GB storage
-- **Secret Manager**: $0.06/secret/month
-
-To reduce costs, remove `min_instance_count = 1` in `terraform/cloud_run.tf` (allows scale to zero, but background tasks may be interrupted).
-
-### Troubleshooting
-
-**View backend logs:**
-```bash
-gcloud run services logs read gap-analysis-backend --region=us-central1 --limit=50
-```
-
-**View frontend logs:**
-```bash
-gcloud run services logs read gap-analysis-frontend --region=us-central1 --limit=50
-```
-
-**Describe services:**
-```bash
-gcloud run services describe gap-analysis-backend --region=us-central1
-gcloud run services describe gap-analysis-frontend --region=us-central1
-```
-
-**Re-upload Google Ads secret (if expired):**
-```bash
-gcloud secrets versions add google-ads-yaml --data-file=scripts/google-ads.yaml
-```
-
-### Security
-
-The services are currently configured with `allUsers` invoker permissions (public access). To restrict access:
-
-1. Edit `terraform/cloud_run.tf` and change:
-   ```hcl
-   member   = "allUsers"
-   ```
-   to:
-   ```hcl
-   member   = "user:your-email@example.com"
-   # or
-   member   = "domain:example.com"
-   ```
-
-2. Re-apply: `cd terraform && terraform apply`
-
-Alternatively, configure [Identity-Aware Proxy](https://cloud.google.com/iap/docs/enabling-cloud-run) for enterprise authentication.
 
 ---
 
 ## Local Development
 
-For local development or self-hosted VPS deployment.
-
-### 1. Deploy Infrastructure
+### 1. Infrastructure
 
 ```bash
 cd terraform
@@ -299,9 +254,7 @@ terraform init
 terraform apply
 ```
 
-Creates: BigQuery dataset/tables, Firestore database + composite indexes, Vertex AI connection, service account.
-
-### 2. Setup Backend
+### 2. Backend
 
 ```bash
 cd backend
@@ -309,17 +262,14 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Copy and fill in environment variables
-cp .env.example .env
-# Set GCP_SERVICE_ACCOUNT_KEY_PATH if not using ADC
-
+# Ensure scripts/google-ads.yaml is present (see above)
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API: `http://localhost:8000`  
-Docs: `http://localhost:8000/docs`
+API: http://localhost:8000  
+Docs: http://localhost:8000/docs
 
-### 3. Setup Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -327,213 +277,18 @@ npm install
 npm run dev
 ```
 
-Frontend: `http://localhost:5173`
+Frontend: http://localhost:5173
 
-## API Endpoints
-
-### Keyword Reports
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/keyword-reports` | Submit URLs → background keyword fetch |
-| `GET` | `/keyword-reports` | List reports (`?status=archived` for archived) |
-| `GET` | `/keyword-reports/{id}/keywords` | Keywords for a report (from BigQuery) |
-| `PATCH` | `/keyword-reports/{id}/archive` | Archive a completed report |
-| `PATCH` | `/keyword-reports/{id}/unarchive` | Restore an archived report |
-| `DELETE` | `/keyword-reports/{id}` | Hard-delete a failed report |
-
-### Gap Analysis
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/gap-analyses` | Run pipeline against a keyword report; optional `filter_ids` to chain filters after completion |
-| `GET` | `/gap-analyses` | List analyses |
-| `GET` | `/gap-analyses/{id}` | Get analysis status |
-| `GET` | `/gap-analyses/{id}/results` | Paginated results with sorting and optional filter application |
-| `DELETE` | `/gap-analyses/{id}` | Delete analysis (cascades to filter_executions + BQ filter_results) |
-
-**Results query params:**
-- `order_by`: `semantic_distance` | `avg_monthly_searches` | `keyword_text`
-- `order_dir`: `ASC` | `DESC`
-- `filter_execution_ids`: repeat for each execution to AND together (e.g. `?filter_execution_ids=abc&filter_execution_ids=def`)
-
-### Filter Executions
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/gap-analyses/{id}/filter-executions` | Run one or more filters against a completed analysis; body: `{filter_ids: [...]}` |
-| `GET` | `/gap-analyses/{id}/filter-executions` | List all executions for an analysis |
-| `DELETE` | `/gap-analyses/{id}/filter-executions/{exec_id}` | Delete execution + BQ rows |
-
-**Collision rule:** A 409 is returned if any of the submitted filters share a `label` or `name` with an existing processing/completed execution on the same analysis.
-
-### Filters
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/filters` | List all filters |
-| `POST` | `/filters` | Create a filter (`name`, `label`, `text`) |
-| `GET/PUT/DELETE` | `/filters/{id}` | Manage a filter |
-
-### Other
-| Method | Path | Description |
-|---|---|---|
-| `GET/PUT` | `/portfolio` | Get/replace portfolio items |
-| `GET` | `/portfolio/meta` | Portfolio metadata |
-| `GET/PUT` | `/settings/prompts` | Gemini prompt templates |
-| `GET` | `/health` | Connection status for GA, BQ, Firestore |
-
-## Data Schema
-
-### Firestore Collections
-
-**`keyword_reports`**
-```json
-{
-  "report_id": "uuid",
-  "name": "My Report",
-  "created_at": "timestamp",
-  "status": "processing | completed | failed | archived",
-  "urls": ["https://example.com"],
-  "total_keywords_found": 5885,
-  "error_message": null
-}
-```
-
-**`gap_analyses`**
-```json
-{
-  "analysis_id": "uuid",
-  "name": "My Analysis",
-  "report_id": "uuid",
-  "status": "processing | completed | failed",
-  "created_at": "timestamp",
-  "total_keywords_analyzed": 5785,
-  "error_message": null
-}
-```
-
-**`filters`**
-```json
-{
-  "filter_id": "uuid",
-  "name": "Brand Filter",
-  "label": "non_branded",
-  "text": "TRUE: Generic product categories...\nFALSE: Contains a specific brand name...",
-  "status": "active",
-  "created_at": "timestamp",
-  "updated_at": null
-}
-```
-
-**`filter_executions`**
-```json
-{
-  "execution_id": "uuid",
-  "analysis_id": "uuid",
-  "filter_id": "uuid",
-  "filter_snapshot": {
-    "name": "Brand Filter",
-    "label": "non_branded",
-    "text": "..."
-  },
-  "status": "processing | completed | failed",
-  "created_at": "timestamp",
-  "total_evaluated": 5785,
-  "error_message": null
-}
-```
-
-> `filter_snapshot` preserves the exact filter state at execution time. Editing the live filter afterward does not affect past executions.
-
-### BigQuery Tables (`keyword_planner_data` dataset)
-
-| Table | Key Columns |
-|---|---|
-| `keyword_results` | `run_id`, `source_url`, `keyword_text`, `avg_monthly_searches`, `competition`, `low/high_top_of_page_bid_usd` |
-| `portfolio_items` | `item_text` |
-| `portfolio_embeddings` | `item_text`, `intent_string`, `embedding`, `prompt_hash`, `embedded_at` |
-| `gap_analysis_results` | `analysis_id`, `keyword_text`, `keyword_intent`, `closest_portfolio_item`, `closest_portfolio_intent`, `semantic_distance`, `avg_monthly_searches` |
-| `filter_results` | `execution_id`, `analysis_id`, `keyword_text`, `label`, `result` (BOOL), `confidence`, `created_at` |
-
-### BigQuery ML Models (`keyword_planner_data` dataset)
-
-| Model | Endpoint | Used for |
-|---|---|---|
-| `gemini-flash` | `gemini-2.5-flash` | Keyword/portfolio intent generation + filter boolean classification |
-| `text-embeddings` | `text-embedding-005` | Semantic embeddings (512-dim, SEMANTIC_SIMILARITY) |
-
-Both models are created at startup via `CREATE MODEL IF NOT EXISTS` and shared across all pipelines.
-
-## Dev Environment (tmux)
-
-```bash
-# Start both servers
-tmux new-session -d -s gap_analysis 2>/dev/null || true
-
-tmux kill-window -t gap_analysis:backend 2>/dev/null
-tmux new-window -t gap_analysis -n backend \
-  "cd $(pwd)/backend && uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
-
-tmux kill-window -t gap_analysis:frontend 2>/dev/null
-tmux new-window -t gap_analysis -n frontend \
-  "cd $(pwd)/frontend && npm run dev"
-
-echo "Backend:  http://localhost:8000"
-echo "Frontend: http://localhost:5173"
-```
-
-### Health Check
-
-```bash
-curl -s http://localhost:8000/health | python3 -m json.tool
-```
-
-## Code Structure
-
-```
-backend/
-├── api.py               # FastAPI app, CORS, lifespan startup
-├── db.py                # Shared GA/BQ/Firestore clients, constants
-├── bq_ml.py             # BQ ML model management, gap analysis pipeline, filter pipeline
-├── config.yaml          # GCP project, table names, API settings
-├── requirements.txt
-└── routers/
-    ├── keyword_reports.py    # /keyword-reports
-    ├── gap_analysis.py       # /gap-analyses (pipeline + results query)
-    ├── filter_executions.py  # /gap-analyses/{id}/filter-executions
-    ├── portfolio.py          # /portfolio
-    ├── filters.py            # /filters
-    └── settings.py           # /settings/prompts
-
-frontend/src/
-├── App.jsx                     # Routes + layout
-├── components/
-│   ├── Navbar.jsx
-│   ├── ReportsList.jsx
-│   ├── KeywordTable.jsx
-│   ├── NewReportModal.jsx
-│   ├── NewFilterModal.jsx
-│   └── ...
-└── pages/
-    ├── KeywordReportsPage.jsx  # /keyword-reports
-    ├── ReportDetailPage.jsx    # /keyword-reports/:id
-    ├── FiltersPage.jsx
-    ├── FilterDetailPage.jsx
-    └── PortfolioPage.jsx
-
-terraform/
-├── main.tf               # Provider, API enablement
-├── bigquery.tf           # Dataset + all tables (keyword_results, portfolio, gap_analysis_results, filter_results)
-├── firestore.tf          # Firestore database + composite indexes
-├── vertex_ai.tf          # Vertex AI connection + IAM
-├── service_accounts.tf
-└── outputs.tf
-```
+---
 
 ## Security
 
 ⚠️ **Never commit:**
-- `backend/service-account-key.json`
-- `backend/.env`
 - `scripts/google-ads.yaml`
 - `terraform/*.tfstate`
+- `backend/service-account-key.json`
+
+---
 
 ## Cleanup
 
