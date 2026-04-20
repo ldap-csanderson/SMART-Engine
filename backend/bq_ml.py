@@ -165,7 +165,7 @@ _EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 'SEMANTIC_SIMILARITY' AS task_t
 
 def run_gap_analysis_pipeline(
     analysis_id: str,
-    source_dataset_id: str,
+    source_dataset_ids: list,  # list of dataset_ids (1 for single dataset, N for group)
     target_dataset_ids: list,  # list of dataset_ids (1 for single dataset, N for group)
     source_prompt: str,
     target_prompt: str,
@@ -175,7 +175,7 @@ def run_gap_analysis_pipeline(
     """
     Run the full gap analysis pipeline using v3 dataset_items / dataset_embeddings tables.
 
-    source_dataset_id: the dataset to search (universe)
+    source_dataset_ids: list of dataset IDs to search (universe) — 1 for single dataset, N for group
     target_dataset_ids: list of dataset IDs to compare against (existing coverage)
     source_prompt: intent prompt for source items
     target_prompt: intent prompt for target items
@@ -192,7 +192,8 @@ def run_gap_analysis_pipeline(
     tmp_src_emb = f"_tmp_{tid}_src_emb"
     tmp_tgt_intent = f"_tmp_{tid}_tgt_intent"
 
-    # Build SQL IN clause for target dataset IDs
+    # Build SQL IN clauses for source and target dataset IDs
+    source_ids_sql = ", ".join(f"'{did}'" for did in source_dataset_ids)
     target_ids_sql = ", ".join(f"'{did}'" for did in target_dataset_ids)
 
     # Step 1: source item intent strings
@@ -211,7 +212,7 @@ def run_gap_analysis_pipeline(
                 item_text,
                 CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
               FROM {_t(T_DATASET_ITEMS)}
-              WHERE dataset_id = '{source_dataset_id}'
+              WHERE dataset_id IN ({source_ids_sql})
                 {search_vol_filter}
             ),
             {_LLM_OPTS}
@@ -338,7 +339,7 @@ def run_gap_analysis_pipeline(
         LEFT JOIN (
           SELECT item_text, MAX(avg_monthly_searches) AS avg_monthly_searches
           FROM {_t(T_DATASET_ITEMS)}
-          WHERE dataset_id = '{source_dataset_id}'
+          WHERE dataset_id IN ({source_ids_sql})
           GROUP BY item_text
         ) kw ON vs.keyword_text = kw.item_text
     """, "Step 4: insert gap analysis results (VECTOR_SEARCH)")

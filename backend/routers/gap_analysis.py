@@ -19,7 +19,8 @@ router = APIRouter(prefix="/gap-analyses", tags=["gap-analysis"])
 
 class GapAnalysisCreate(BaseModel):
     name: str
-    source_dataset_id: str
+    source_dataset_id: str        # dataset_id OR group_id
+    source_is_group: bool = False
     target_dataset_id: str        # dataset_id OR group_id
     target_is_group: bool = False
     filter_ids: Optional[List[str]] = None
@@ -27,7 +28,8 @@ class GapAnalysisCreate(BaseModel):
 
 
 class GapAnalysisEstimateRequest(BaseModel):
-    source_dataset_id: str
+    source_dataset_id: str        # dataset_id OR group_id
+    source_is_group: bool = False
     min_monthly_searches: int = 1000
 
 
@@ -44,6 +46,7 @@ class GapAnalysis(BaseModel):
     source_dataset_id: str
     source_dataset_name: str
     source_dataset_type: str
+    source_is_group: bool = False
     target_dataset_id: str
     target_dataset_name: str
     target_is_group: bool
@@ -135,7 +138,7 @@ def _run_filter_execution(execution_id: str, analysis_id: str, filter_snapshot: 
 
 def _run_analysis_background(
     analysis_id: str,
-    source_dataset_id: str,
+    source_dataset_ids: List[str],
     source_dataset_type: str,
     target_dataset_ids: List[str],
     target_dataset_type: str,
@@ -148,13 +151,14 @@ def _run_analysis_background(
         # Pre-count source items
         if bq_client:
             try:
+                source_ids_sql = ", ".join(f"'{did}'" for did in source_dataset_ids)
                 search_vol_filter = ""
                 if source_dataset_type in SEARCH_VOLUME_TYPES and min_monthly_searches > 0:
                     search_vol_filter = f"AND avg_monthly_searches >= {min_monthly_searches}"
                 kw_rows = bq_client.query(f"""
                     SELECT COUNT(DISTINCT item_text)
                     FROM `{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}`
-                    WHERE dataset_id = '{source_dataset_id}'
+                    WHERE dataset_id IN ({source_ids_sql})
                       {search_vol_filter}
                 """).result()
                 kw_count = list(kw_rows)[0][0] or 0
@@ -170,7 +174,7 @@ def _run_analysis_background(
 
         count = run_gap_analysis_pipeline(
             analysis_id=analysis_id,
-            source_dataset_id=source_dataset_id,
+            source_dataset_ids=source_dataset_ids,
             target_dataset_ids=target_dataset_ids,
             source_prompt=source_prompt,
             target_prompt=target_prompt,
@@ -230,6 +234,7 @@ def _doc_to_gap_analysis(d: dict) -> GapAnalysis:
         source_dataset_id=d.get("source_dataset_id", ""),
         source_dataset_name=d.get("source_dataset_name", ""),
         source_dataset_type=d.get("source_dataset_type", ""),
+        source_is_group=d.get("source_is_group", False),
         target_dataset_id=d.get("target_dataset_id", ""),
         target_dataset_name=d.get("target_dataset_name", ""),
         target_is_group=d.get("target_is_group", False),
@@ -252,15 +257,34 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     if not bq_client:
         raise HTTPException(503, "BigQuery not initialized")
 
-    # Verify source dataset
-    src_doc = db.collection("datasets").document(payload.source_dataset_id).get()
-    if not src_doc.exists:
-        raise HTTPException(404, f"Source dataset {payload.source_dataset_id} not found")
-    src_data = src_doc.to_dict()
-    if src_data.get("item_count", 0) == 0 and src_data.get("status") == "completed":
-        raise HTTPException(400, "Source dataset is empty.")
+    # Resolve source: dataset or group
+    source_dataset_ids = []
+    source_dataset_name = ""
+    source_dataset_type = "text_list"
 
-    source_dataset_type = src_data.get("type", "text_list")
+    if payload.source_is_group:
+        src_grp_doc = db.collection("dataset_groups").document(payload.source_dataset_id).get()
+        if not src_grp_doc.exists:
+            raise HTTPException(404, f"Source dataset group {payload.source_dataset_id} not found")
+        src_grp_data = src_grp_doc.to_dict()
+        source_dataset_ids = src_grp_data.get("dataset_ids", [])
+        source_dataset_name = src_grp_data.get("name", "")
+        if not source_dataset_ids:
+            raise HTTPException(400, "Source dataset group is empty.")
+        # Use the type of the first dataset in the group for prompt selection
+        first_src_ds = db.collection("datasets").document(source_dataset_ids[0]).get()
+        if first_src_ds.exists:
+            source_dataset_type = first_src_ds.to_dict().get("type", "text_list")
+    else:
+        src_doc = db.collection("datasets").document(payload.source_dataset_id).get()
+        if not src_doc.exists:
+            raise HTTPException(404, f"Source dataset {payload.source_dataset_id} not found")
+        src_data = src_doc.to_dict()
+        if src_data.get("item_count", 0) == 0 and src_data.get("status") == "completed":
+            raise HTTPException(400, "Source dataset is empty.")
+        source_dataset_ids = [payload.source_dataset_id]
+        source_dataset_name = src_data.get("name", "")
+        source_dataset_type = src_data.get("type", "text_list")
 
     # Resolve target: dataset or group
     target_dataset_ids = []
@@ -270,7 +294,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     if payload.target_is_group:
         grp_doc = db.collection("dataset_groups").document(payload.target_dataset_id).get()
         if not grp_doc.exists:
-            raise HTTPException(404, f"Dataset group {payload.target_dataset_id} not found")
+            raise HTTPException(404, f"Target dataset group {payload.target_dataset_id} not found")
         grp_data = grp_doc.to_dict()
         target_dataset_ids = grp_data.get("dataset_ids", [])
         target_dataset_name = grp_data.get("name", "")
@@ -302,8 +326,9 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "analysis_id": analysis_id,
         "name": payload.name,
         "source_dataset_id": payload.source_dataset_id,
-        "source_dataset_name": src_data.get("name", ""),
+        "source_dataset_name": source_dataset_name,
         "source_dataset_type": source_dataset_type,
+        "source_is_group": payload.source_is_group,
         "target_dataset_id": payload.target_dataset_id,
         "target_dataset_name": target_dataset_name,
         "target_is_group": payload.target_is_group,
@@ -317,7 +342,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
     background_tasks.add_task(
         _run_analysis_background,
         analysis_id,
-        payload.source_dataset_id,
+        source_dataset_ids,
         source_dataset_type,
         target_dataset_ids,
         target_dataset_type,
@@ -331,26 +356,49 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
 
 @router.post("/estimate", response_model=GapAnalysisEstimateResponse)
 def estimate_gap_analysis(payload: GapAnalysisEstimateRequest):
-    """Estimate cost for running a gap analysis on a source dataset."""
+    """Estimate cost for running a gap analysis on a source dataset or group."""
     if not bq_client:
         raise HTTPException(503, "BigQuery not initialized")
     if not db:
         raise HTTPException(503, "Firestore not initialized")
 
-    src_doc = db.collection("datasets").document(payload.source_dataset_id).get()
-    if not src_doc.exists:
-        raise HTTPException(404, f"Source dataset {payload.source_dataset_id} not found")
-    src_type = src_doc.to_dict().get("type", "text_list")
+    # Resolve source dataset IDs and type
+    source_dataset_ids = []
+    source_dataset_type = "text_list"
 
+    if payload.source_is_group:
+        grp_doc = db.collection("dataset_groups").document(payload.source_dataset_id).get()
+        if not grp_doc.exists:
+            raise HTTPException(404, f"Source group {payload.source_dataset_id} not found")
+        grp_data = grp_doc.to_dict()
+        source_dataset_ids = grp_data.get("dataset_ids", [])
+        if not source_dataset_ids:
+            return GapAnalysisEstimateResponse(
+                unique_items=0,
+                estimated_llm_cost_usd=0.0,
+                estimated_embedding_cost_usd=0.0,
+                estimated_cost_usd=0.0,
+            )
+        first_ds = db.collection("datasets").document(source_dataset_ids[0]).get()
+        if first_ds.exists:
+            source_dataset_type = first_ds.to_dict().get("type", "text_list")
+    else:
+        src_doc = db.collection("datasets").document(payload.source_dataset_id).get()
+        if not src_doc.exists:
+            raise HTTPException(404, f"Source dataset {payload.source_dataset_id} not found")
+        source_dataset_type = src_doc.to_dict().get("type", "text_list")
+        source_dataset_ids = [payload.source_dataset_id]
+
+    source_ids_sql = ", ".join(f"'{did}'" for did in source_dataset_ids)
     search_vol_filter = ""
-    if src_type in SEARCH_VOLUME_TYPES and payload.min_monthly_searches > 0:
+    if source_dataset_type in SEARCH_VOLUME_TYPES and payload.min_monthly_searches > 0:
         search_vol_filter = f"AND avg_monthly_searches >= {payload.min_monthly_searches}"
 
     try:
         row = bq_client.query(f"""
             SELECT COUNT(DISTINCT item_text)
             FROM `{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}`
-            WHERE dataset_id = '{payload.source_dataset_id}'
+            WHERE dataset_id IN ({source_ids_sql})
               {search_vol_filter}
         """).result()
         unique_items = list(row)[0][0] or 0

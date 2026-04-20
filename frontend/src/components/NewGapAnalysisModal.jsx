@@ -15,6 +15,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const [name, setName] = useState('')
   const [datasets, setDatasets] = useState([])
   const [groups, setGroups] = useState([])
+  const [sourceMode, setSourceMode] = useState('dataset') // 'dataset' | 'group'
   const [sourceId, setSourceId] = useState('')
   const [targetMode, setTargetMode] = useState('dataset') // 'dataset' | 'group'
   const [targetId, setTargetId] = useState('')
@@ -39,8 +40,12 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
     }).catch(console.error)
   }, [])
 
-  const sourceDataset = datasets.find(d => d.dataset_id === sourceId)
-  const showSearchVolume = sourceDataset && SEARCH_VOLUME_TYPES.has(sourceDataset.type)
+  const sourceDataset = sourceMode === 'dataset' ? datasets.find(d => d.dataset_id === sourceId) : null
+  // Show min searches if source is a single keyword dataset, or always when source is a group
+  // (group may contain keyword datasets; backend handles the filter appropriately)
+  const showSearchVolume = sourceMode === 'group'
+    ? !!sourceId
+    : (sourceDataset && SEARCH_VOLUME_TYPES.has(sourceDataset.type))
 
   // Fetch cost estimate when source + min_searches changes
   useEffect(() => {
@@ -51,14 +56,18 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
         const res = await fetch(`${API_BASE}/api/gap-analyses/estimate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_dataset_id: sourceId, min_monthly_searches: showSearchVolume ? minSearches : 0 }),
+          body: JSON.stringify({
+            source_dataset_id: sourceId,
+            source_is_group: sourceMode === 'group',
+            min_monthly_searches: showSearchVolume ? minSearches : 0,
+          }),
         })
         if (res.ok) setEstimate(await res.json())
       } catch {}
       finally { setEstimating(false) }
     }, 600)
     return () => clearTimeout(timer)
-  }, [sourceId, minSearches, showSearchVolume])
+  }, [sourceId, sourceMode, minSearches, showSearchVolume])
 
   const toggleFilter = (id) => {
     setFilterIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -68,7 +77,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
     e.preventDefault()
     setError('')
     if (!name.trim()) { setError('Name is required'); return }
-    if (!sourceId) { setError('Select a source dataset'); return }
+    if (!sourceId) { setError('Select a source dataset or group'); return }
     if (!targetId) { setError('Select a target dataset or group'); return }
 
     setSubmitting(true)
@@ -79,6 +88,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
         body: JSON.stringify({
           name: name.trim(),
           source_dataset_id: sourceId,
+          source_is_group: sourceMode === 'group',
           target_dataset_id: targetId,
           target_is_group: targetMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
@@ -97,6 +107,33 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
       setSubmitting(false)
     }
   }
+
+  const ModeToggle = ({ mode, setMode, setId }) => (
+    <div className="flex gap-2 mb-2">
+      <button
+        type="button"
+        onClick={() => { setMode('dataset'); setId('') }}
+        className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+          mode === 'dataset'
+            ? 'bg-indigo-600 text-white border-indigo-600'
+            : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+        }`}
+      >
+        Dataset
+      </button>
+      <button
+        type="button"
+        onClick={() => { setMode('group'); setId('') }}
+        className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+          mode === 'group'
+            ? 'bg-indigo-600 text-white border-indigo-600'
+            : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+        }`}
+      >
+        Group
+      </button>
+    </div>
+  )
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -118,22 +155,38 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
             />
           </div>
 
-          {/* Source dataset */}
+          {/* Source: dataset or group */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Source Dataset</label>
-            <p className="text-xs text-gray-400 mb-1">The universe to search for gaps</p>
-            <select
-              value={sourceId}
-              onChange={e => setSourceId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">— Select source dataset —</option>
-              {datasets.map(d => (
-                <option key={d.dataset_id} value={d.dataset_id}>
-                  {d.name} ({TYPE_LABELS[d.type] || d.type}, {d.item_count.toLocaleString()} items)
-                </option>
-              ))}
-            </select>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+            <p className="text-xs text-gray-400 mb-2">The universe to search for gaps</p>
+            <ModeToggle mode={sourceMode} setMode={setSourceMode} setId={setSourceId} />
+            {sourceMode === 'dataset' ? (
+              <select
+                value={sourceId}
+                onChange={e => setSourceId(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">— Select source dataset —</option>
+                {datasets.map(d => (
+                  <option key={d.dataset_id} value={d.dataset_id}>
+                    {d.name} ({TYPE_LABELS[d.type] || d.type}, {d.item_count.toLocaleString()} items)
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={sourceId}
+                onChange={e => setSourceId(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">— Select source group —</option>
+                {groups.map(g => (
+                  <option key={g.group_id} value={g.group_id}>
+                    {g.name} ({g.dataset_count} datasets)
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Min monthly searches (conditional) */}
@@ -141,6 +194,9 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Min Monthly Searches
+                {sourceMode === 'group' && (
+                  <span className="text-gray-400 font-normal ml-1">(applies to keyword datasets)</span>
+                )}
               </label>
               <input
                 type="number"
@@ -173,30 +229,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Target</label>
             <p className="text-xs text-gray-400 mb-2">The existing coverage to compare against</p>
-            <div className="flex gap-2 mb-2">
-              <button
-                type="button"
-                onClick={() => { setTargetMode('dataset'); setTargetId('') }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                  targetMode === 'dataset'
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-                }`}
-              >
-                Dataset
-              </button>
-              <button
-                type="button"
-                onClick={() => { setTargetMode('group'); setTargetId('') }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                  targetMode === 'group'
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
-                }`}
-              >
-                Group
-              </button>
-            </div>
+            <ModeToggle mode={targetMode} setMode={setTargetMode} setId={setTargetId} />
             {targetMode === 'dataset' ? (
               <select
                 value={targetId}
