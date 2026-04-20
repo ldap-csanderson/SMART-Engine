@@ -98,33 +98,56 @@ class AccountsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _get_accessible_accounts(client, customer_id: str) -> List[Dict]:
-    """List all accessible customer accounts under the given customer (MCC or leaf)."""
-    customer_service = client.get_service("CustomerService")
-    accessible = customer_service.list_accessible_customers()
-    resource_names = accessible.resource_names
+    """List all accessible leaf accounts under the configured customer.
 
+    When customer_id is an MCC, the customer_client report enumerates every
+    managed account in the hierarchy.  If it returns nothing (e.g. customer_id
+    is already a leaf), we fall back to querying the account directly.
+    """
     ga_service = client.get_service("GoogleAdsService")
     accounts = []
 
-    for resource_name in resource_names:
-        cid = resource_name.split("/")[-1]
+    try:
+        # MCC path: customer_client traverses the full account hierarchy
+        query = """
+            SELECT
+              customer_client.id,
+              customer_client.descriptive_name,
+              customer_client.manager,
+              customer_client.status
+            FROM customer_client
+            WHERE customer_client.status = 'ENABLED'
+              AND customer_client.manager = false
+        """
+        response = ga_service.search(customer_id=customer_id, query=query)
+        for row in response:
+            cc = row.customer_client
+            accounts.append({
+                "account_id": str(cc.id),
+                "name": cc.descriptive_name or f"Account {cc.id}",
+                "is_manager": False,
+            })
+        print(f"✅ Listed {len(accounts)} managed accounts under MCC {customer_id}")
+    except Exception as e:
+        print(f"⚠️ customer_client query failed for {customer_id}: {e}")
+
+    if not accounts:
+        # Fallback: customer_id may be a leaf account — query it directly
         try:
             query = """
-                SELECT
-                  customer.id,
-                  customer.descriptive_name,
-                  customer.manager
+                SELECT customer.id, customer.descriptive_name, customer.manager
                 FROM customer
-                WHERE customer.id = """ + cid
-            response = ga_service.search(customer_id=cid, query=query)
+            """
+            response = ga_service.search(customer_id=customer_id, query=query)
             for row in response:
                 accounts.append({
                     "account_id": str(row.customer.id),
                     "name": row.customer.descriptive_name or f"Account {row.customer.id}",
                     "is_manager": row.customer.manager,
                 })
-        except Exception:
-            pass
+            print(f"✅ Fallback: listed {len(accounts)} direct account(s) for {customer_id}")
+        except Exception as e2:
+            print(f"⚠️ Direct customer query also failed for {customer_id}: {e2}")
 
     return accounts
 
