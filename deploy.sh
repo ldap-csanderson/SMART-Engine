@@ -35,9 +35,11 @@ gcloud builds submit . \
 
 echo ""
 echo "🔄 Updating Cloud Run with new image..."
-cd terraform
-terraform apply -auto-approve
-cd ..
+gcloud run deploy ${IMAGE_NAME} \
+  --image ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest \
+  --region ${REGION} \
+  --project ${PROJECT_ID} \
+  --quiet
 
 echo ""
 echo "✅ Deployment complete!"
