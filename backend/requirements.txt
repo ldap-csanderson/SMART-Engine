@@ -2,6 +2,7 @@
 google-ads>=28.0.0
 google-cloud-bigquery>=3.0.0
 google-cloud-firestore>=2.14.0
+google-cloud-secret-manager>=2.0.0
 pandas>=2.0.0
 tqdm>=4.65.0
 pyarrow>=10.0.0

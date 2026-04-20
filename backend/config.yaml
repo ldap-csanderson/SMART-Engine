@@ -31,6 +31,16 @@ google_ads:
   customer_id: "2900871247"
   config_path: "../scripts/google-ads.yaml"
 
+# OAuth Settings (for in-app Google Ads re-authorization)
+oauth:
+  # Must be added as an Authorized Redirect URI in Google Cloud Console
+  # for OAuth client: 759167631809-1ibgmfql9fp8o6be06nub9q5pcle8117.apps.googleusercontent.com
+  redirect_uri: "https://smart-engine-xdzhjknata-uc.a.run.app/api/auth/google-ads/callback"
+
+# Secret Manager Settings
+secrets:
+  google_ads_secret_name: "google-ads-yaml"
+
 # API Settings
 api:
   max_retries: 3

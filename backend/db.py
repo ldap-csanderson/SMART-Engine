@@ -51,8 +51,10 @@ try:
     if ga_client:
         print(f"✅ Connected to Google Ads API (config: {google_ads_config_path})")
     else:
-        print(f"❌ Failed to initialize Google Ads client")
-        ga_auth_manager = None
+        # Token may be expired or revoked — keep ga_auth_manager so in-app
+        # re-authorization can still read config and reload the client.
+        print(f"⚠️  Google Ads token invalid — use Settings → Re-authorize to reconnect")
+        ga_client = None
 except Exception as e:
     print(f"❌ Failed to load Google Ads client: {e}")
     ga_client = None
@@ -71,6 +73,16 @@ try:
 except Exception as e:
     print(f"❌ Failed to initialize Firestore client: {e}")
     db = None
+
+
+def get_ga_client():
+    """Return the current Google Ads client from the auth manager.
+
+    Always reflects the live state — use this instead of the cached module-level
+    ga_client variable so that in-app OAuth re-authorization takes effect
+    immediately without a service restart.
+    """
+    return ga_auth_manager.client if ga_auth_manager else None
 
 
 def ts_to_str(ts) -> str:

@@ -6,7 +6,7 @@ from google.ads.googleads.client import GoogleAdsClient
 
 
 class GoogleAdsAuthManager:
-    """Manages Google Ads OAuth token refresh."""
+    """Manages Google Ads OAuth token refresh and in-app re-authorization."""
 
     def __init__(self, config_path: str):
         self.config_path = config_path
@@ -107,6 +107,59 @@ class GoogleAdsAuthManager:
     def client(self) -> Optional[GoogleAdsClient]:
         """Get the current client instance."""
         return self._client
+
+    def get_config(self) -> dict:
+        """Return the current credentials config.
+
+        If _config is set (after a successful token refresh), returns it.
+        Otherwise reads directly from the config file, which always contains
+        client_id, client_secret, developer_token, etc. needed for OAuth.
+        """
+        if self._config:
+            return dict(self._config)
+        try:
+            return self._read_config()
+        except Exception:
+            return {}
+
+    def reload_from_credentials(self, new_config: dict) -> None:
+        """Update credentials in-memory and reload the Google Ads client.
+
+        Called after a successful OAuth re-authorization to apply the new
+        refresh_token + access_token without restarting the service.
+        """
+        self._config = dict(new_config)
+        self._load_client(after_refresh=True)
+
+    def write_to_secret_manager(self, secret_name: str, project_id: str) -> bool:
+        """Write current credentials to Secret Manager as a new secret version.
+
+        Strips the short-lived access_token before storing — the service will
+        use the refresh_token to obtain fresh access tokens as needed.
+        Returns True on success.
+        """
+        try:
+            from google.cloud import secretmanager
+
+            # Exclude short-lived access_token from the stored secret
+            config_to_store = {k: v for k, v in self._config.items() if k != "access_token"}
+            if not config_to_store:
+                print("❌ No config to write to Secret Manager")
+                return False
+
+            content = yaml.dump(config_to_store, default_flow_style=False).encode("utf-8")
+
+            sm_client = secretmanager.SecretManagerServiceClient()
+            parent = f"projects/{project_id}/secrets/{secret_name}"
+            sm_client.add_secret_version(
+                request={"parent": parent, "payload": {"data": content}}
+            )
+            print(f"✅ New secret version written to {parent}")
+            return True
+
+        except Exception as e:
+            print(f"❌ Failed to write to Secret Manager: {e}")
+            return False
 
     def refresh_access_token(self) -> bool:
         """

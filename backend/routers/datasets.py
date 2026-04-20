@@ -10,7 +10,7 @@ from google.cloud import firestore
 from pydantic import BaseModel
 
 from db import (
-    ga_client, ga_auth_manager, bq_client, db, ts_to_str,
+    ga_auth_manager, get_ga_client, bq_client, db, ts_to_str,
     CUSTOMER_ID, MAX_RETRIES, RETRY_DELAY,
     PROJECT_ID, DATASET_ID, T_DATASET_ITEMS,
     SEARCH_VOLUME_TYPES,
@@ -384,13 +384,16 @@ def _insert_items_to_bq(dataset_id: str, items: List[Dict[str, Any]]):
 
 def _ingest_google_ads_keywords(dataset_id: str, source_config: Dict):
     """Background: fetch keyword planner results for URL-seeded dataset."""
+    client = get_ga_client()
     urls = source_config.get("urls", [])
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     total = 0
     try:
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
         for i, url in enumerate(urls):
             print(f"[{i+1}/{len(urls)}] Fetching keyword ideas for: {url}")
-            items = _fetch_keyword_ideas_for_url(ga_client, customer_id, url)
+            items = _fetch_keyword_ideas_for_url(client, customer_id, url)
             _insert_items_to_bq(dataset_id, items)
             total += len(items)
             if i < len(urls) - 1:
@@ -415,10 +418,13 @@ def _ingest_google_ads_keywords(dataset_id: str, source_config: Dict):
 
 def _ingest_google_ads_ad_copy(dataset_id: str, source_config: Dict):
     """Background: fetch ad copy from Google Ads accounts."""
+    client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
     try:
-        items = _fetch_ad_copy(ga_client, customer_id, account_ids)
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        items = _fetch_ad_copy(client, customer_id, account_ids)
         _insert_items_to_bq(dataset_id, items)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
@@ -440,11 +446,14 @@ def _ingest_google_ads_ad_copy(dataset_id: str, source_config: Dict):
 
 def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
     """Background: fetch search terms report from Google Ads accounts."""
+    client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
     date_range_days = source_config.get("date_range_days", 90)
     try:
-        items = _fetch_search_terms(ga_client, customer_id, account_ids, date_range_days)
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        items = _fetch_search_terms(client, customer_id, account_ids, date_range_days)
         _insert_items_to_bq(dataset_id, items)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
@@ -466,10 +475,13 @@ def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
 
 def _ingest_google_ads_keyword_planner(dataset_id: str, source_config: Dict):
     """Background: fetch keyword planner ideas at account level."""
+    client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
     try:
-        items = _fetch_keyword_planner_account(ga_client, customer_id, account_ids)
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        items = _fetch_keyword_planner_account(client, customer_id, account_ids)
         _insert_items_to_bq(dataset_id, items)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
@@ -519,10 +531,11 @@ def _ingest_text_list(dataset_id: str, items: List[str]):
 @router.get("/accounts", response_model=AccountsResponse)
 def list_accounts():
     """List all accessible Google Ads accounts under the configured customer."""
-    if ga_client is None:
-        raise HTTPException(503, "Google Ads client not initialized")
+    client = get_ga_client()
+    if client is None:
+        raise HTTPException(503, "Google Ads client not connected. Please re-authorize via Settings.")
     try:
-        accounts = _get_accessible_accounts(ga_client, CUSTOMER_ID)
+        accounts = _get_accessible_accounts(client, CUSTOMER_ID)
         is_mcc = any(a["is_manager"] for a in accounts)
         # Filter out manager accounts from the selectable list
         leaf_accounts = [a for a in accounts if not a["is_manager"]]
@@ -580,8 +593,8 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         raise HTTPException(503, "Firestore not initialized")
     if payload.type not in VALID_TYPES:
         raise HTTPException(400, f"Invalid type '{payload.type}'. Must be one of: {', '.join(sorted(VALID_TYPES))}")
-    if payload.type in GOOGLE_ADS_TYPES and ga_client is None:
-        raise HTTPException(503, "Google Ads client not initialized")
+    if payload.type in GOOGLE_ADS_TYPES and get_ga_client() is None:
+        raise HTTPException(503, "Google Ads client not connected. Please re-authorize via Settings.")
     if payload.type == "text_list":
         if not payload.items:
             raise HTTPException(400, "items is required for text_list datasets")
@@ -603,7 +616,7 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         "dataset_id": dataset_id,
         "name": payload.name.strip(),
         "type": payload.type,
-        "status": "processing" if payload.type != "text_list" else "processing",
+        "status": "processing",
         "item_count": 0,
         "source_config": source_config,
         "created_at": firestore.SERVER_TIMESTAMP,

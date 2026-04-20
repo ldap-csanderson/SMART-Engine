@@ -7,10 +7,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from db import ga_client, bq_client, db, config
+from db import ga_auth_manager, bq_client, db, config
 from bq_ml import create_models_if_not_exist
 from routers.settings import _ensure_defaults
-from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions
+from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
 from routers.filter_executions import resume_stuck_filter_executions
 
 
@@ -33,13 +33,15 @@ app.include_router(filters.router, prefix="/api")
 app.include_router(gap_analysis.router, prefix="/api")
 app.include_router(filter_executions.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 
 
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
-        "google_ads_connected": ga_client is not None,
+        # Always read from auth_manager so re-auth takes effect immediately
+        "google_ads_connected": ga_auth_manager is not None and ga_auth_manager.client is not None,
         "bigquery_connected": bq_client is not None,
         "firestore_connected": db is not None,
     }
