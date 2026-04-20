@@ -81,6 +81,20 @@ def _build_prompts_response(d: dict) -> Prompts:
     )
 
 
+@router.get("/prompts/defaults", response_model=Prompts)
+def get_prompt_defaults():
+    """Return the hardcoded default prompts (never reads Firestore)."""
+    defaults = _get_defaults()
+    return Prompts(
+        google_ads_keywords_intent_prompt=defaults["google_ads_keywords_intent_prompt"],
+        google_ads_keyword_planner_intent_prompt=defaults["google_ads_keyword_planner_intent_prompt"],
+        google_ads_search_terms_intent_prompt=defaults["google_ads_search_terms_intent_prompt"],
+        google_ads_ad_copy_intent_prompt=defaults["google_ads_ad_copy_intent_prompt"],
+        text_list_intent_prompt=defaults["text_list_intent_prompt"],
+        updated_at=None,
+    )
+
+
 @router.get("/prompts", response_model=Prompts)
 def get_prompts():
     if not db:
