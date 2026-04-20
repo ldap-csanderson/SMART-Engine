@@ -90,12 +90,36 @@ This rebuilds the image and deploys a new Cloud Run revision. Takes ~3-4 minutes
 
 ---
 
-## Updating the Google Ads Secret
+## Google Ads Re-Authorization (In-App)
 
-When OAuth tokens expire or credentials change:
+The app includes a built-in OAuth re-authorization flow. When the Google Ads token expires or is revoked, go to **Settings → Authorize Google Ads** in the UI.
+
+### One-time Setup (Required Before First Use)
+
+Add the callback URL as an **Authorized Redirect URI** in the Google Cloud Console:
+
+1. Go to [APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials) in the `csanderson-experimental-443821` project
+2. Click the OAuth 2.0 Client ID: `759167631809-1ibgmfql9fp8o6be06nub9q5pcle8117.apps.googleusercontent.com`
+3. Under **Authorized redirect URIs**, add:
+   ```
+   https://smart-engine-xdzhjknata-uc.a.run.app/api/auth/google-ads/callback
+   ```
+4. Save
+
+### How the Flow Works
+
+1. Click **Authorize Google Ads** on the Settings page
+2. A popup opens — sign in with the Google account that has access to the MCC
+3. Grant the `Google Ads API` scope
+4. The popup closes and the app is immediately reconnected (no restart needed)
+5. The new refresh token is written to Secret Manager and persists across restarts
+
+### Manual Fallback (CLI)
+
+If the in-app flow is unavailable, update the secret manually:
 
 ```bash
-# Add a new secret version (Cloud Run always uses "latest")
+# Edit scripts/google-ads.yaml with a fresh refresh_token, then:
 gcloud secrets versions add google-ads-yaml \
   --data-file=scripts/google-ads.yaml \
   --project=csanderson-experimental-443821
@@ -104,12 +128,7 @@ gcloud secrets versions add google-ads-yaml \
 gcloud run services update smart-engine \
   --region=us-central1 \
   --project=csanderson-experimental-443821
-
-# Verify Google Ads is connected
-curl -s https://smart-engine-xdzhjknata-uc.a.run.app/api/health | jq .
 ```
-
-**Note:** Cloud Run mounts secret versions as files. Updating a secret version does **not** automatically restart the service — you must force a new revision as shown above.
 
 ---
 
@@ -150,6 +169,7 @@ All infrastructure is managed by Terraform in `terraform/`:
 - `roles/datastore.user`
 - `roles/aiplatform.user`
 - `roles/secretmanager.secretAccessor`
+- `roles/secretmanager.secretVersionAdder` *(for in-app OAuth token rotation)*
 
 ---
 
@@ -200,7 +220,7 @@ gcloud run services describe smart-engine \
 ### Common Issues
 
 **`google_ads_connected: false`**  
-The Google Ads secret is missing, expired, or has an `invalid_grant` error. Update the secret and force a new revision (see "Updating the Google Ads Secret" above).
+The OAuth refresh token has expired or been revoked (`invalid_grant`). Use the **Settings → Authorize Google Ads** button in the UI (see "Google Ads Re-Authorization" above) — no restart needed. As a fallback, use the manual CLI method.
 
 **Container fails to start**  
 Check logs for Python import errors or missing config. Common causes:

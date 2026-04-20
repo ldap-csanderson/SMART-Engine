@@ -122,7 +122,7 @@ login_customer_id: "YOUR_LOGIN_CUSTOMER_ID"
 use_proto_plus: true
 ```
 
-**Token refresh:** When the access token expires, `google_ads_auth.py` automatically exchanges the refresh token for a new access token in memory (does not write back to file, since `/secrets` is read-only on Cloud Run).
+**Token refresh:** When the access token expires mid-request, `google_ads_auth.py` automatically refreshes it in memory. If the refresh token itself is revoked (e.g. `invalid_grant`), use **Settings → Authorize Google Ads** in the UI to re-authorize via the in-app OAuth flow — no restart required. See `DEPLOYMENT_GUIDE.md` for setup steps.
 
 ---
 
@@ -185,11 +185,18 @@ Only `google_ads_keywords` and `google_ads_keyword_planner` produce search volum
 | `GET` | `/api/gap-analyses/{id}/filter-executions` | List executions |
 | `DELETE` | `/api/gap-analyses/{id}/filter-executions/{exec_id}` | Delete execution |
 
+### Auth
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/auth/google-ads/status` | Google Ads connection status |
+| `GET` | `/api/auth/google-ads/start` | Start OAuth flow (returns auth URL + PKCE state) |
+| `GET` | `/api/auth/google-ads/callback` | OAuth callback — exchanges code, updates Secret Manager, reloads client |
+
 ### Other
 | Method | Path | Description |
 |---|---|---|
 | `GET/PUT` | `/api/settings/prompts` | Per-type Gemini prompt overrides |
-| `GET` | `/api/health` | Connection status |
+| `GET` | `/api/health` | Connection status (google_ads, bigquery, firestore) |
 
 ---
 
@@ -218,12 +225,13 @@ Models are created at startup via `CREATE MODEL IF NOT EXISTS`.
 ```
 backend/
 ├── api.py               # FastAPI app, lifespan startup, static file serving
-├── db.py                # Shared clients (GA, BQ, Firestore) + constants
+├── db.py                # Shared clients (GA, BQ, Firestore) + get_ga_client()
 ├── bq_ml.py             # BQ ML pipeline: gap analysis, filter execution, intent prompts
-├── config.yaml          # GCP project, table names, customer_id, API settings
-├── google_ads_auth.py   # OAuth token refresh (in-memory, /secrets is read-only)
+├── config.yaml          # GCP project, table names, customer_id, oauth, secrets
+├── google_ads_auth.py   # OAuth token refresh + in-app re-auth (Secret Manager write)
 ├── requirements.txt
 └── routers/
+    ├── auth.py             # /api/auth/google-ads — PKCE OAuth start/callback
     ├── datasets.py         # /api/datasets — CRUD + background ingestion for all types
     ├── dataset_groups.py   # /api/dataset-groups
     ├── gap_analysis.py     # /api/gap-analyses — pipeline + results query
@@ -232,14 +240,16 @@ backend/
     └── settings.py         # /api/settings/prompts — per-type prompt overrides
 
 frontend/src/
-├── App.jsx              # Routes: /datasets, /dataset-groups, /gap-analyses, /filters
+├── App.jsx              # Routes: /datasets, /dataset-groups, /gap-analyses, /filters, /settings, /oauth/callback
 └── pages/
     ├── DatasetsPage.jsx
     ├── DatasetDetailPage.jsx
     ├── DatasetGroupsPage.jsx
     ├── DatasetGroupDetailPage.jsx
     ├── GapAnalysesPage.jsx
-    └── GapAnalysisDetailPage.jsx
+    ├── GapAnalysisDetailPage.jsx
+    ├── SettingsPage.jsx        # Service status + Google Ads re-authorize button
+    └── OAuthCallbackPage.jsx   # Popup closer — sends postMessage to opener, self-closes
 ```
 
 ---
