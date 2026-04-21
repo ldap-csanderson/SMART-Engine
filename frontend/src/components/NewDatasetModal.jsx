@@ -216,10 +216,10 @@ export default function NewDatasetModal({ onClose, onCreated }) {
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || accountsLoading}
               className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
             >
-              {submitting ? 'Creating…' : 'Create Dataset'}
+              {submitting ? 'Creating…' : accountsLoading ? 'Loading accounts…' : 'Create Dataset'}
             </button>
           </div>
         </form>

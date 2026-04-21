@@ -461,6 +461,14 @@ def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
     try:
         if client is None:
             raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        # If no account_ids were provided, auto-discover all leaf accounts.
+        # Falling back to the MCC CID directly will fail for search_term_view.
+        if not account_ids:
+            discovered = _get_accessible_accounts(client, customer_id)
+            account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
+            print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
+            if not account_ids:
+                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
         items = _fetch_search_terms(client, customer_id, account_ids, date_range_days)
         _insert_items_to_bq(dataset_id, items)
         db.collection("datasets").document(dataset_id).update({
