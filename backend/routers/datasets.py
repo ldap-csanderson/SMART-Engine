@@ -263,17 +263,25 @@ def _fetch_ad_copy(client, customer_id: str, account_ids: List[str]) -> List[Dic
 
 def _fetch_search_terms(client, customer_id: str, account_ids: List[str], date_range_days: int = 90) -> List[Dict]:
     """Fetch search terms report from the given accounts."""
+    from datetime import timedelta
     ga_service = client.get_service("GoogleAdsService")
     target_ids = account_ids if account_ids else [customer_id]
     items = []
     seen = set()
+
+    # Use explicit date range instead of DURING LAST_N_DAYS — GAQL only supports
+    # a fixed set of DURING literals (LAST_7_DAYS, LAST_14_DAYS, LAST_30_DAYS …)
+    # and does NOT support LAST_60_DAYS / LAST_90_DAYS / LAST_180_DAYS.
+    start_date = (datetime.now(timezone.utc) - timedelta(days=date_range_days)).strftime('%Y-%m-%d')
+    end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
     query = f"""
         SELECT
           search_term_view.search_term,
           metrics.impressions
         FROM search_term_view
-        WHERE segments.date DURING LAST_{date_range_days}_DAYS
+        WHERE segments.date >= '{start_date}'
+          AND segments.date <= '{end_date}'
           AND search_term_view.status != 'EXCLUDED'
         ORDER BY metrics.impressions DESC
     """
