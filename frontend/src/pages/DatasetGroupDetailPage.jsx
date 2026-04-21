@@ -5,6 +5,7 @@ import API_BASE from '../config'
 import EditableTitle from '../components/EditableTitle'
 
 const TYPE_LABELS = {
+  google_ads_account_keywords: 'Account Keywords',
   google_ads_keywords: 'Keyword Planner (URL)',
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',

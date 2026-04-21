@@ -5,6 +5,7 @@ import CostEstimateBox, { estimateFilterCost } from './CostEstimateBox'
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 
 const TYPE_LABELS = {
+  google_ads_account_keywords: 'Account Keywords',
   google_ads_keywords: 'Keyword Planner (URL)',
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',
