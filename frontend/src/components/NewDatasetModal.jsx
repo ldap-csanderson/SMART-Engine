@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import API_BASE from '../config'
 
 const TYPES = [
-  { value: 'google_ads_keywords', label: 'Keyword Planner (URL-seeded)', needsAds: true },
-  { value: 'google_ads_ad_copy', label: 'Ad Copy', needsAds: true },
+  { value: 'google_ads_account_keywords', label: 'Account Keywords', needsAds: true },
   { value: 'google_ads_search_terms', label: 'Search Terms Report', needsAds: true },
+  { value: 'google_ads_ad_copy', label: 'Ad Copy', needsAds: true },
+  { value: 'google_ads_keywords', label: 'Keyword Planner (URL-seeded)', needsAds: true },
   { value: 'google_ads_keyword_planner', label: 'Keyword Planner (Account-level)', needsAds: true },
   { value: 'text_list', label: 'Text List (manual)', needsAds: false },
 ]

@@ -27,6 +27,7 @@ VALID_TYPES = {
     "google_ads_ad_copy",
     "google_ads_search_terms",
     "google_ads_keyword_planner",
+    "google_ads_account_keywords",
     "text_list",
 }
 
@@ -36,6 +37,7 @@ GOOGLE_ADS_TYPES = {
     "google_ads_ad_copy",
     "google_ads_search_terms",
     "google_ads_keyword_planner",
+    "google_ads_account_keywords",
 }
 
 # ---------------------------------------------------------------------------
@@ -361,6 +363,81 @@ def _fetch_keyword_planner_account(client, customer_id: str, account_ids: List[s
             print(f"⚠️ Could not fetch keyword planner data from account {acct_id}: {e}")
 
     return items
+
+
+def _fetch_account_keywords(client, customer_id: str, account_ids: List[str]) -> List[Dict]:
+    """Fetch actual keywords from Google Ads accounts via ad_group_criterion.
+
+    Returns ENABLED and PAUSED keywords (excludes REMOVED).
+    Deduplicates by keyword text across all accounts.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    target_ids = account_ids if account_ids else [customer_id]
+    items = []
+    seen = set()
+
+    query = """
+        SELECT
+          ad_group_criterion.keyword.text,
+          ad_group_criterion.keyword.match_type,
+          ad_group_criterion.status
+        FROM ad_group_criterion
+        WHERE ad_group_criterion.type = 'KEYWORD'
+          AND ad_group_criterion.status != 'REMOVED'
+          AND campaign.status != 'REMOVED'
+          AND ad_group.status != 'REMOVED'
+    """
+
+    for i, acct_id in enumerate(target_ids, 1):
+        acct_start = len(items)
+        try:
+            print(f"[{i}/{len(target_ids)}] Fetching account keywords from account {acct_id}…")
+            response = ga_service.search(customer_id=acct_id, query=query)
+            for row in response:
+                kw = row.ad_group_criterion.keyword.text.strip().lower()
+                if kw and kw not in seen:
+                    seen.add(kw)
+                    items.append({"item_text": kw})
+            print(f"[{i}/{len(target_ids)}] Account {acct_id}: {len(items) - acct_start} new keywords (total {len(items)})")
+        except Exception as e:
+            print(f"⚠️ Could not fetch keywords from account {acct_id}: {e}")
+
+    return items
+
+
+def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
+    """Background: fetch actual keywords from Google Ads accounts."""
+    client = get_ga_client()
+    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    account_ids = source_config.get("account_ids", [])
+    try:
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        # Auto-discover leaf accounts if none specified (same safety net as search terms)
+        if not account_ids:
+            discovered = _get_accessible_accounts(client, customer_id)
+            account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
+            print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
+            if not account_ids:
+                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
+        items = _fetch_account_keywords(client, customer_id, account_ids)
+        _insert_items_to_bq(dataset_id, items)
+        db.collection("datasets").document(dataset_id).update({
+            "status": "completed",
+            "item_count": len(items),
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        print(f"✅ Dataset {dataset_id} (google_ads_account_keywords) completed — {len(items)} items")
+    except Exception as e:
+        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
+        try:
+            db.collection("datasets").document(dataset_id).update({
+                "status": "failed",
+                "error_message": str(e),
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            })
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +780,8 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         background_tasks.add_task(_ingest_google_ads_search_terms, dataset_id, source_config)
     elif payload.type == "google_ads_keyword_planner":
         background_tasks.add_task(_ingest_google_ads_keyword_planner, dataset_id, source_config)
+    elif payload.type == "google_ads_account_keywords":
+        background_tasks.add_task(_ingest_google_ads_account_keywords, dataset_id, source_config)
     elif payload.type == "text_list":
         background_tasks.add_task(_ingest_text_list, dataset_id, items_to_store)
 
