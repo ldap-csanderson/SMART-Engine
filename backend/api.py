@@ -12,6 +12,7 @@ from bq_ml import create_models_if_not_exist
 from routers.settings import _ensure_defaults
 from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
 from routers.filter_executions import resume_stuck_filter_executions
+from routers.datasets import resume_stuck_datasets
 
 
 @asynccontextmanager
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_ensure_defaults, daemon=True).start()
     # Resume any filter executions that were interrupted by a previous deploy/crash
     threading.Thread(target=resume_stuck_filter_executions, daemon=True).start()
+    # Mark any datasets stuck in 'processing' as failed (handles container crashes)
+    threading.Thread(target=resume_stuck_datasets, daemon=True).start()
     yield
 
 

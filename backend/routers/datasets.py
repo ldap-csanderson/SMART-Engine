@@ -261,6 +261,10 @@ def _fetch_ad_copy(client, customer_id: str, account_ids: List[str]) -> List[Dic
     return items
 
 
+# Per-account gRPC timeout for search terms streaming (seconds).
+# Large accounts can return 50k+ rows; 180s gives ~3s per 1k rows headroom.
+_SEARCH_TERMS_TIMEOUT_S = 180
+
 def _fetch_search_terms(client, customer_id: str, account_ids: List[str], date_range_days: int = 90) -> List[Dict]:
     """Fetch search terms report from the given accounts."""
     from datetime import timedelta
@@ -286,14 +290,21 @@ def _fetch_search_terms(client, customer_id: str, account_ids: List[str], date_r
         ORDER BY metrics.impressions DESC
     """
 
-    for acct_id in target_ids:
+    for i, acct_id in enumerate(target_ids, 1):
+        acct_start = len(items)
         try:
-            response = ga_service.search(customer_id=acct_id, query=query)
+            print(f"[{i}/{len(target_ids)}] Fetching search terms from account {acct_id}…")
+            response = ga_service.search(
+                customer_id=acct_id,
+                query=query,
+                timeout=_SEARCH_TERMS_TIMEOUT_S,
+            )
             for row in response:
                 term = row.search_term_view.search_term.strip()
                 if term and term not in seen:
                     seen.add(term)
                     items.append({"item_text": term})
+            print(f"[{i}/{len(target_ids)}] Account {acct_id}: {len(items) - acct_start} new terms (total {len(items)})")
         except Exception as e:
             print(f"⚠️ Could not fetch search terms from account {acct_id}: {e}")
 
@@ -538,6 +549,45 @@ def _ingest_text_list(dataset_id: str, items: List[str]):
             })
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Startup helpers
+# ---------------------------------------------------------------------------
+
+def resume_stuck_datasets(stuck_after_minutes: int = 30):
+    """On startup, mark any datasets stuck in 'processing' as failed.
+
+    Called from api.py lifespan so that a container crash or gRPC hang
+    from a previous revision doesn't leave datasets in limbo forever.
+    """
+    if not db:
+        return
+    try:
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stuck_after_minutes)
+        stuck = []
+        for doc in db.collection("datasets").where("status", "==", "processing").stream():
+            d = doc.to_dict()
+            created_at = d.get("created_at")
+            # Firestore timestamps come back as datetime objects
+            if created_at:
+                if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if created_at < cutoff:
+                    stuck.append(doc)
+        if not stuck:
+            print("✅ No stuck datasets found")
+            return
+        for doc in stuck:
+            doc.reference.update({
+                "status": "failed",
+                "error_message": "Ingestion was interrupted (container restart or timeout). Please retry.",
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            })
+            print(f"⚠️ Marked stuck dataset {doc.id} as failed")
+    except Exception as e:
+        print(f"⚠️ Could not check for stuck datasets: {e}")
 
 
 # ---------------------------------------------------------------------------
