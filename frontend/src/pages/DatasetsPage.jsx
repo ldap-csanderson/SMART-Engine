@@ -4,6 +4,7 @@ import API_BASE from '../config'
 import NewDatasetModal from '../components/NewDatasetModal'
 
 const TYPE_LABELS = {
+  google_ads_account_keywords: 'Account Keywords',
   google_ads_keywords: 'Keyword Planner (URL)',
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',
@@ -12,6 +13,7 @@ const TYPE_LABELS = {
 }
 
 const TYPE_COLORS = {
+  google_ads_account_keywords: 'bg-orange-100 text-orange-800',
   google_ads_keywords: 'bg-blue-100 text-blue-800',
   google_ads_ad_copy: 'bg-purple-100 text-purple-800',
   google_ads_search_terms: 'bg-green-100 text-green-800',
@@ -94,7 +96,7 @@ export default function DatasetsPage() {
                 <span className={`font-medium ${STATUS_COLORS[ds.status] || 'text-gray-500'}`}>
                   {ds.status === 'processing' ? '⏳ processing…' : ds.status}
                 </span>
-                <span>{ds.item_count.toLocaleString()} items</span>
+                <span>{ds.status === 'processing' ? '—' : `${ds.item_count.toLocaleString()} items`}</span>
                 <span>{new Date(ds.created_at).toLocaleDateString()}</span>
               </div>
             </Link>

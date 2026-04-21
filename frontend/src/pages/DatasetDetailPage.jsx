@@ -5,6 +5,7 @@ import EditableTitle from '../components/EditableTitle'
 import PaginationBar from '../components/PaginationBar'
 
 const TYPE_LABELS = {
+  google_ads_account_keywords: 'Account Keywords',
   google_ads_keywords: 'Keyword Planner (URL)',
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',
@@ -147,7 +148,7 @@ export default function DatasetDetailPage() {
           </div>
           <EditableTitle value={dataset.name} onSave={handleRename} className="text-2xl font-bold text-gray-900" />
           <p className="text-sm text-gray-500 mt-1">
-            {dataset.item_count.toLocaleString()} items · Created {new Date(dataset.created_at).toLocaleDateString()}
+            {dataset.status === 'processing' ? '—' : `${dataset.item_count.toLocaleString()} items`} · Created {new Date(dataset.created_at).toLocaleDateString()}
           </p>
           {dataset.error_message && (
             <p className="text-sm text-red-600 mt-2">Error: {dataset.error_message}</p>
