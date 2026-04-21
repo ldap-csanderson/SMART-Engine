@@ -287,21 +287,23 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
             </div>
 
             {/* Intent Normalization toggle */}
-            <div className="flex items-start gap-3 py-2 border-t border-gray-100">
-              <input
-                type="checkbox"
-                id="intent-norm"
-                checked={useIntentNormalization}
-                onChange={e => setUseIntentNormalization(e.target.checked)}
-                className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
-                disabled={estimating}
-              />
-              <label htmlFor="intent-norm" className="cursor-pointer">
-                <span className="text-sm font-medium text-gray-700">Intent Normalization</span>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Use an LLM to convert each item into a normalized intent statement before comparison. Improves cross-format matching (e.g. keywords vs ad copy) but adds LLM cost.
-                </p>
-              </label>
+            <div className="py-2 border-t border-gray-100">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="intent-norm"
+                  checked={useIntentNormalization}
+                  onChange={e => setUseIntentNormalization(e.target.checked)}
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                  disabled={estimating}
+                />
+                <label htmlFor="intent-norm" className="text-sm font-medium text-gray-700 cursor-pointer">
+                  Intent Normalization
+                </label>
+              </div>
+              <p className="text-xs text-gray-400 mt-1 ml-7">
+                Use an LLM to convert each item into a normalized intent statement before comparison. Improves cross-format matching (e.g. keywords vs ad copy) but adds LLM cost.
+              </p>
             </div>
 
             {/* Filters (optional) */}
