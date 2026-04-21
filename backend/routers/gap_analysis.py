@@ -25,12 +25,14 @@ class GapAnalysisCreate(BaseModel):
     target_is_group: bool = False
     filter_ids: Optional[List[str]] = None
     min_monthly_searches: int = 1000
+    use_intent_normalization: bool = False
 
 
 class GapAnalysisEstimateRequest(BaseModel):
     source_dataset_id: str        # dataset_id OR group_id
     source_is_group: bool = False
     min_monthly_searches: int = 1000
+    use_intent_normalization: bool = False
 
 
 class GapAnalysisEstimateResponse(BaseModel):
@@ -54,6 +56,7 @@ class GapAnalysis(BaseModel):
     created_at: str
     total_items_analyzed: int
     min_monthly_searches: Optional[int] = None
+    use_intent_normalization: Optional[bool] = None
     error_message: Optional[str] = None
 
 
@@ -144,9 +147,10 @@ def _run_analysis_background(
     target_dataset_type: str,
     filter_ids: Optional[List[str]] = None,
     min_monthly_searches: int = 1000,
+    use_intent_normalization: bool = False,
 ):
     """Background task: run the full gap analysis pipeline, then any chained filters."""
-    print(f"🔄 Gap analysis {analysis_id} started")
+    print(f"🔄 Gap analysis {analysis_id} started (intent_normalization={use_intent_normalization})")
     try:
         # Pre-count source items
         if bq_client:
@@ -180,6 +184,7 @@ def _run_analysis_background(
             target_prompt=target_prompt,
             source_dataset_type=source_dataset_type,
             min_monthly_searches=min_monthly_searches,
+            use_intent_normalization=use_intent_normalization,
         )
         db.collection("gap_analyses").document(analysis_id).update({
             "status": "completed",
@@ -242,6 +247,7 @@ def _doc_to_gap_analysis(d: dict) -> GapAnalysis:
         created_at=ts_to_str(d["created_at"]),
         total_items_analyzed=d.get("total_items_analyzed", 0),
         min_monthly_searches=d.get("min_monthly_searches"),
+        use_intent_normalization=d.get("use_intent_normalization"),
         error_message=d.get("error_message"),
     )
 
@@ -333,6 +339,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "target_dataset_name": target_dataset_name,
         "target_is_group": payload.target_is_group,
         "min_monthly_searches": payload.min_monthly_searches,
+        "use_intent_normalization": payload.use_intent_normalization,
         "status": "processing",
         "created_at": firestore.SERVER_TIMESTAMP,
         "total_items_analyzed": 0,
@@ -348,6 +355,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         target_dataset_type,
         payload.filter_ids,
         payload.min_monthly_searches,
+        payload.use_intent_normalization,
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
@@ -405,8 +413,13 @@ def estimate_gap_analysis(payload: GapAnalysisEstimateRequest):
     except Exception as e:
         raise HTTPException(500, f"Failed to count items: {e}")
 
-    llm_cost_per_item = (200 * 0.25 + 50 * 1.50) / 1_000_000
-    estimated_llm_cost = round(unique_items * llm_cost_per_item, 2)
+    # LLM cost is zero when intent normalization is disabled
+    if payload.use_intent_normalization:
+        llm_cost_per_item = (200 * 0.25 + 50 * 1.50) / 1_000_000
+        estimated_llm_cost = round(unique_items * llm_cost_per_item, 2)
+    else:
+        estimated_llm_cost = 0.0
+
     emb_cost_per_item = 100 * 0.000025 / 1_000
     estimated_emb_cost = round(unique_items * emb_cost_per_item, 2)
 

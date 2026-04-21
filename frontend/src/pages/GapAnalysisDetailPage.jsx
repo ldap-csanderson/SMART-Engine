@@ -378,7 +378,7 @@ export default function GapAnalysisDetailPage() {
             Back to Gap Analyses
           </button>
           <EditableTitle value={analysis.name} onSave={handleRename} saving={renaming} />
-          <div className="flex items-center gap-2 text-sm text-gray-600 mt-1 flex-wrap">
+            <div className="flex items-center gap-2 text-sm text-gray-600 mt-1 flex-wrap">
             <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
               analysis.status === 'completed'  ? 'bg-green-100 text-green-800' :
               analysis.status === 'processing' ? 'bg-blue-100 text-blue-800' :
@@ -387,6 +387,15 @@ export default function GapAnalysisDetailPage() {
             }`}>
               {analysis.status === 'processing' ? 'In Progress' : analysis.status}
             </span>
+            {analysis.use_intent_normalization != null && (
+              <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
+                analysis.use_intent_normalization
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : 'bg-gray-100 text-gray-500'
+              }`}>
+                {analysis.use_intent_normalization ? 'Intent normalized' : 'Direct comparison'}
+              </span>
+            )}
             <span>·</span>
             <span>{totalCount.toLocaleString()} items</span>
             <span>·</span>
@@ -587,6 +596,7 @@ export default function GapAnalysisDetailPage() {
           sourceColumnLabel={analysis.source_dataset_name || 'Source Item'}
           targetColumnLabel={`Closest in ${analysis.target_dataset_name || 'Target'}`}
           showSearchVolume={showSearchVolumeControls}
+          showIntentColumns={analysis.use_intent_normalization === true}
         />
 
         <RunFiltersModal

@@ -134,7 +134,12 @@ Examples:
 
 def get_default_prompt_for_type(dataset_type: str) -> str:
     """Return the default intent prompt for a given dataset type."""
-    if dataset_type in ("google_ads_keywords", "google_ads_keyword_planner", "google_ads_search_terms"):
+    if dataset_type in (
+        "google_ads_keywords",
+        "google_ads_keyword_planner",
+        "google_ads_search_terms",
+        "google_ads_account_keywords",
+    ):
         return _DEFAULT_KEYWORD_PROMPT
     elif dataset_type == "google_ads_ad_copy":
         return _DEFAULT_AD_COPY_PROMPT
@@ -162,6 +167,9 @@ _PARSE_INTENT = r"""JSON_VALUE(
 _LLM_OPTS = "STRUCT(250 AS max_output_tokens, 0.2 AS temperature, TRUE AS flatten_json_output)"
 _EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 'SEMANTIC_SIMILARITY' AS task_type, 512 AS output_dimensionality)"
 
+# Special prompt_hash used when intent normalization is disabled (items embedded directly).
+_DIRECT_PROMPT_HASH = "__direct__"
+
 
 def run_gap_analysis_pipeline(
     analysis_id: str,
@@ -171,23 +179,20 @@ def run_gap_analysis_pipeline(
     target_prompt: str,
     source_dataset_type: str,
     min_monthly_searches: int = 1000,
+    use_intent_normalization: bool = True,
 ) -> int:
     """
     Run the full gap analysis pipeline using v3 dataset_items / dataset_embeddings tables.
 
     source_dataset_ids: list of dataset IDs to search (universe) — 1 for single dataset, N for group
     target_dataset_ids: list of dataset IDs to compare against (existing coverage)
-    source_prompt: intent prompt for source items
-    target_prompt: intent prompt for target items
+    source_prompt: intent prompt for source items (used only when use_intent_normalization=True)
+    target_prompt: intent prompt for target items (used only when use_intent_normalization=True)
     source_dataset_type: used to decide whether to apply min_monthly_searches filter
+    use_intent_normalization: when False, items are embedded directly without LLM normalization
     Returns the number of result rows inserted.
     """
-    source_ph = compute_prompt_hash(source_prompt)
-    target_ph = compute_prompt_hash(target_prompt)
-    sp = _sq(source_prompt)
-    tp = _sq(target_prompt)
     tid = analysis_id.replace("-", "_")
-
     tmp_src_intent = f"_tmp_{tid}_src_intent"
     tmp_src_emb = f"_tmp_{tid}_src_emb"
     tmp_tgt_intent = f"_tmp_{tid}_tgt_intent"
@@ -196,111 +201,178 @@ def run_gap_analysis_pipeline(
     source_ids_sql = ", ".join(f"'{did}'" for did in source_dataset_ids)
     target_ids_sql = ", ".join(f"'{did}'" for did in target_dataset_ids)
 
-    # Step 1: source item intent strings
     # Apply min_monthly_searches filter only for types that have search volume
     search_vol_filter = ""
     if source_dataset_type in SEARCH_VOLUME_TYPES and min_monthly_searches > 0:
         search_vol_filter = f"AND avg_monthly_searches >= {min_monthly_searches}"
 
-    run_bq(f"""
-        CREATE OR REPLACE TABLE {_t(tmp_src_intent)} AS
-        WITH llm AS (
-          SELECT * FROM ML.GENERATE_TEXT(
-            MODEL {_m(MODEL_GEMINI)},
-            (
-              SELECT DISTINCT
-                item_text,
-                CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-              FROM {_t(T_DATASET_ITEMS)}
-              WHERE dataset_id IN ({source_ids_sql})
-                {search_vol_filter}
-            ),
-            {_LLM_OPTS}
-          )
-        )
-        SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-    """, "Step 1: source item intents")
+    if use_intent_normalization:
+        source_ph = compute_prompt_hash(source_prompt)
+        target_ph = compute_prompt_hash(target_prompt)
+        sp = _sq(source_prompt)
+        tp = _sq(target_prompt)
 
-    # Step 2: source item embeddings
-    run_bq(f"""
-        CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-        SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
-        FROM ML.GENERATE_EMBEDDING(
-          MODEL {_m(MODEL_EMBEDDINGS)},
-          (
-            SELECT DISTINCT item_text, intent_string, intent_string AS content
-            FROM {_t(tmp_src_intent)}
-            WHERE intent_string IS NOT NULL
-          ),
-          {_EMB_OPTS}
-        )
-    """, "Step 2: source item embeddings")
-
-    # Step 3a: count uncached target items
-    uncached = run_bq_scalar(f"""
-        SELECT COUNT(DISTINCT di.item_text)
-        FROM {_t(T_DATASET_ITEMS)} di
-        LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
-          ON di.item_text = de.item_text
-          AND di.dataset_id = de.dataset_id
-          AND de.prompt_hash = '{target_ph}'
-        WHERE di.dataset_id IN ({target_ids_sql})
-          AND de.item_text IS NULL
-    """)
-    print(f"📊 Uncached target items: {uncached}")
-
-    if uncached > 0:
-        # Step 3b: target item intent strings for uncached items
+        # Step 1: source item intent strings via LLM
         run_bq(f"""
-            CREATE OR REPLACE TABLE {_t(tmp_tgt_intent)} AS
+            CREATE OR REPLACE TABLE {_t(tmp_src_intent)} AS
             WITH llm AS (
               SELECT * FROM ML.GENERATE_TEXT(
                 MODEL {_m(MODEL_GEMINI)},
                 (
-                  SELECT DISTINCT di.item_text,
-                    CONCAT('{tp}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                  FROM {_t(T_DATASET_ITEMS)} di
-                  LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
-                    ON di.item_text = de.item_text
-                    AND di.dataset_id = de.dataset_id
-                    AND de.prompt_hash = '{target_ph}'
-                  WHERE di.dataset_id IN ({target_ids_sql})
-                    AND de.item_text IS NULL
+                  SELECT DISTINCT
+                    item_text,
+                    CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                  FROM {_t(T_DATASET_ITEMS)}
+                  WHERE dataset_id IN ({source_ids_sql})
+                    {search_vol_filter}
                 ),
                 {_LLM_OPTS}
               )
             )
             SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-        """, "Step 3b: target item intents for uncached items")
+        """, "Step 1: source item intents")
 
-        # Step 3c: insert new embeddings into cache (one row per dataset_id × item_text)
-        # We insert for each target dataset separately to maintain dataset_id keying
-        for did in target_dataset_ids:
+        # Step 2: source item embeddings (embed intent_string)
+        run_bq(f"""
+            CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
+            SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
+            FROM ML.GENERATE_EMBEDDING(
+              MODEL {_m(MODEL_EMBEDDINGS)},
+              (
+                SELECT DISTINCT item_text, intent_string, intent_string AS content
+                FROM {_t(tmp_src_intent)}
+                WHERE intent_string IS NOT NULL
+              ),
+              {_EMB_OPTS}
+            )
+        """, "Step 2: source item embeddings")
+
+        # Step 3a: count uncached target items
+        uncached = run_bq_scalar(f"""
+            SELECT COUNT(DISTINCT di.item_text)
+            FROM {_t(T_DATASET_ITEMS)} di
+            LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+              ON di.item_text = de.item_text
+              AND di.dataset_id = de.dataset_id
+              AND de.prompt_hash = '{target_ph}'
+            WHERE di.dataset_id IN ({target_ids_sql})
+              AND de.item_text IS NULL
+        """)
+        print(f"📊 Uncached target items: {uncached}")
+
+        if uncached > 0:
+            # Step 3b: target item intent strings for uncached items via LLM
             run_bq(f"""
-                INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
-                  (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-                SELECT '{did}' AS dataset_id,
-                       item_text, intent_string, ml_generate_embedding_result AS embedding,
-                       '{target_ph}' AS prompt_hash, CURRENT_TIMESTAMP() AS embedded_at
-                FROM ML.GENERATE_EMBEDDING(
-                  MODEL {_m(MODEL_EMBEDDINGS)},
-                  (
-                    SELECT DISTINCT t.item_text, t.intent_string, t.intent_string AS content
-                    FROM {_t(tmp_tgt_intent)} t
-                    INNER JOIN {_t(T_DATASET_ITEMS)} di
-                      ON t.item_text = di.item_text AND di.dataset_id = '{did}'
-                    WHERE t.intent_string IS NOT NULL
-                  ),
-                  {_EMB_OPTS}
+                CREATE OR REPLACE TABLE {_t(tmp_tgt_intent)} AS
+                WITH llm AS (
+                  SELECT * FROM ML.GENERATE_TEXT(
+                    MODEL {_m(MODEL_GEMINI)},
+                    (
+                      SELECT DISTINCT di.item_text,
+                        CONCAT('{tp}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                      FROM {_t(T_DATASET_ITEMS)} di
+                      LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+                        ON di.item_text = de.item_text
+                        AND di.dataset_id = de.dataset_id
+                        AND de.prompt_hash = '{target_ph}'
+                      WHERE di.dataset_id IN ({target_ids_sql})
+                        AND de.item_text IS NULL
+                    ),
+                    {_LLM_OPTS}
+                  )
                 )
-                WHERE item_text NOT IN (
-                  SELECT item_text
-                  FROM {_t(T_DATASET_EMBEDDINGS)}
-                  WHERE dataset_id = '{did}' AND prompt_hash = '{target_ph}'
-                )
-            """, f"Step 3c: populate target embeddings cache (dataset_id={did})")
+                SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
+            """, "Step 3b: target item intents for uncached items")
+
+            # Step 3c: insert new embeddings into cache (intent_string as content)
+            for did in target_dataset_ids:
+                run_bq(f"""
+                    INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
+                      (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
+                    SELECT '{did}' AS dataset_id,
+                           item_text, intent_string, ml_generate_embedding_result AS embedding,
+                           '{target_ph}' AS prompt_hash, CURRENT_TIMESTAMP() AS embedded_at
+                    FROM ML.GENERATE_EMBEDDING(
+                      MODEL {_m(MODEL_EMBEDDINGS)},
+                      (
+                        SELECT DISTINCT t.item_text, t.intent_string, t.intent_string AS content
+                        FROM {_t(tmp_tgt_intent)} t
+                        INNER JOIN {_t(T_DATASET_ITEMS)} di
+                          ON t.item_text = di.item_text AND di.dataset_id = '{did}'
+                        WHERE t.intent_string IS NOT NULL
+                      ),
+                      {_EMB_OPTS}
+                    )
+                    WHERE item_text NOT IN (
+                      SELECT item_text
+                      FROM {_t(T_DATASET_EMBEDDINGS)}
+                      WHERE dataset_id = '{did}' AND prompt_hash = '{target_ph}'
+                    )
+                """, f"Step 3c: populate target embeddings cache (dataset_id={did})")
+
+    else:
+        # Direct mode: skip LLM entirely, embed item_text directly for source and target.
+        # Target embeddings are cached under _DIRECT_PROMPT_HASH so repeated runs reuse the cache.
+        source_ph = target_ph = _DIRECT_PROMPT_HASH
+
+        # Step 2 (direct): embed source item_text directly (no intent step)
+        run_bq(f"""
+            CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
+            SELECT item_text, NULL AS intent_string, ml_generate_embedding_result AS embedding
+            FROM ML.GENERATE_EMBEDDING(
+              MODEL {_m(MODEL_EMBEDDINGS)},
+              (
+                SELECT DISTINCT item_text, item_text AS content
+                FROM {_t(T_DATASET_ITEMS)}
+                WHERE dataset_id IN ({source_ids_sql})
+                  {search_vol_filter}
+              ),
+              {_EMB_OPTS}
+            )
+        """, "Step 2 (direct): source item embeddings")
+
+        # Step 3a (direct): count uncached target items
+        uncached = run_bq_scalar(f"""
+            SELECT COUNT(DISTINCT di.item_text)
+            FROM {_t(T_DATASET_ITEMS)} di
+            LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+              ON di.item_text = de.item_text
+              AND di.dataset_id = de.dataset_id
+              AND de.prompt_hash = '{_DIRECT_PROMPT_HASH}'
+            WHERE di.dataset_id IN ({target_ids_sql})
+              AND de.item_text IS NULL
+        """)
+        print(f"📊 Uncached target items (direct): {uncached}")
+
+        if uncached > 0:
+            # Step 3b (direct): embed target item_text directly and cache
+            for did in target_dataset_ids:
+                run_bq(f"""
+                    INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
+                      (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
+                    SELECT '{did}' AS dataset_id,
+                           item_text, NULL AS intent_string,
+                           ml_generate_embedding_result AS embedding,
+                           '{_DIRECT_PROMPT_HASH}' AS prompt_hash,
+                           CURRENT_TIMESTAMP() AS embedded_at
+                    FROM ML.GENERATE_EMBEDDING(
+                      MODEL {_m(MODEL_EMBEDDINGS)},
+                      (
+                        SELECT DISTINCT di.item_text, di.item_text AS content
+                        FROM {_t(T_DATASET_ITEMS)} di
+                        LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+                          ON di.item_text = de.item_text
+                          AND di.dataset_id = de.dataset_id
+                          AND de.prompt_hash = '{_DIRECT_PROMPT_HASH}'
+                        WHERE di.dataset_id = '{did}'
+                          AND de.item_text IS NULL
+                      ),
+                      {_EMB_OPTS}
+                    )
+                """, f"Step 3b (direct): cache target embeddings (dataset_id={did})")
 
     # Step 4: VECTOR_SEARCH against all target embeddings and insert results
+    # (identical structure for both intent-normalized and direct modes)
     run_bq(f"""
         INSERT INTO {_t(T_GAP_ANALYSIS)}
           (analysis_id, created_at, keyword_text, keyword_intent,
@@ -349,7 +421,7 @@ def run_gap_analysis_pipeline(
         SELECT COUNT(DISTINCT keyword_text) FROM {_t(T_GAP_ANALYSIS)} WHERE analysis_id = '{analysis_id}'
     """)
 
-    # Step 5: cleanup temp tables (best effort)
+    # Step 5: cleanup temp tables (best effort; some may not exist in direct mode)
     for tmp in [tmp_src_intent, tmp_src_emb, tmp_tgt_intent]:
         try:
             run_bq(f"DROP TABLE IF EXISTS {_t(tmp)}", f"Cleanup {tmp}")

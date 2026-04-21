@@ -22,6 +22,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const [targetMode, setTargetMode] = useState('dataset') // 'dataset' | 'group'
   const [targetId, setTargetId] = useState('')
   const [minSearches, setMinSearches] = useState(1000)
+  const [useIntentNormalization, setUseIntentNormalization] = useState(false)
   const [filterIds, setFilterIds] = useState([])
   const [filters, setFilters] = useState([])
 
@@ -70,6 +71,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           source_dataset_id: sourceId,
           source_is_group: sourceMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
+          use_intent_normalization: useIntentNormalization,
         }),
       })
       if (!res.ok) {
@@ -99,6 +101,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           target_dataset_id: targetId,
           target_is_group: targetMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
+          use_intent_normalization: useIntentNormalization,
           filter_ids: filterIds,
         }),
       })
@@ -281,6 +284,24 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
                   ))}
                 </select>
               )}
+            </div>
+
+            {/* Intent Normalization toggle */}
+            <div className="flex items-start gap-3 py-2 border-t border-gray-100">
+              <input
+                type="checkbox"
+                id="intent-norm"
+                checked={useIntentNormalization}
+                onChange={e => setUseIntentNormalization(e.target.checked)}
+                className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                disabled={estimating}
+              />
+              <label htmlFor="intent-norm" className="cursor-pointer">
+                <span className="text-sm font-medium text-gray-700">Intent Normalization</span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Use an LLM to convert each item into a normalized intent statement before comparison. Improves cross-format matching (e.g. keywords vs ad copy) but adds LLM cost.
+                </p>
+              </label>
             </div>
 
             {/* Filters (optional) */}

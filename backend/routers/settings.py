@@ -14,6 +14,7 @@ DATASET_TYPES = [
     "google_ads_keyword_planner",
     "google_ads_search_terms",
     "google_ads_ad_copy",
+    "google_ads_account_keywords",
     "text_list",
 ]
 
@@ -24,6 +25,7 @@ class PromptsUpdate(BaseModel):
     google_ads_keyword_planner_intent_prompt: Optional[str] = None
     google_ads_search_terms_intent_prompt: Optional[str] = None
     google_ads_ad_copy_intent_prompt: Optional[str] = None
+    google_ads_account_keywords_intent_prompt: Optional[str] = None
     text_list_intent_prompt: Optional[str] = None
 
 
@@ -32,6 +34,7 @@ class Prompts(BaseModel):
     google_ads_keyword_planner_intent_prompt: str
     google_ads_search_terms_intent_prompt: str
     google_ads_ad_copy_intent_prompt: str
+    google_ads_account_keywords_intent_prompt: str
     text_list_intent_prompt: str
     updated_at: Optional[str] = None
 
@@ -74,6 +77,9 @@ def _build_prompts_response(d: dict) -> Prompts:
         google_ads_ad_copy_intent_prompt=d.get(
             "google_ads_ad_copy_intent_prompt", defaults["google_ads_ad_copy_intent_prompt"]
         ),
+        google_ads_account_keywords_intent_prompt=d.get(
+            "google_ads_account_keywords_intent_prompt", defaults["google_ads_account_keywords_intent_prompt"]
+        ),
         text_list_intent_prompt=d.get(
             "text_list_intent_prompt", defaults["text_list_intent_prompt"]
         ),
@@ -90,6 +96,7 @@ def get_prompt_defaults():
         google_ads_keyword_planner_intent_prompt=defaults["google_ads_keyword_planner_intent_prompt"],
         google_ads_search_terms_intent_prompt=defaults["google_ads_search_terms_intent_prompt"],
         google_ads_ad_copy_intent_prompt=defaults["google_ads_ad_copy_intent_prompt"],
+        google_ads_account_keywords_intent_prompt=defaults["google_ads_account_keywords_intent_prompt"],
         text_list_intent_prompt=defaults["text_list_intent_prompt"],
         updated_at=None,
     )

@@ -37,6 +37,7 @@ export default function GapResultsTable({
   sourceColumnLabel = 'Source Item',
   targetColumnLabel = 'Closest Match',
   showSearchVolume = true,
+  showIntentColumns = false,
   onSort,
   onPageChange,
   onPageSizeChange,
@@ -113,7 +114,14 @@ export default function GapResultsTable({
                       onClick={() => hasMultiple && onToggleRow(i)}
                       className={`${isHighlighted ? 'bg-yellow-50' : 'hover:bg-gray-50'} ${hasMultiple ? 'cursor-pointer' : ''}`}
                     >
-                      <td className="px-4 py-2.5 font-medium text-gray-900">{row.keyword_text}</td>
+                      <td className="px-4 py-2.5 font-medium text-gray-900">
+                        {row.keyword_text}
+                        {showIntentColumns && row.keyword_intent && (
+                          <p className="text-xs text-gray-400 font-normal mt-0.5 truncate max-w-xs" title={row.keyword_intent}>
+                            {row.keyword_intent}
+                          </p>
+                        )}
+                      </td>
                       {showSearchVolume && (
                         <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
                           {row.avg_monthly_searches?.toLocaleString() ?? '—'}
@@ -126,8 +134,13 @@ export default function GapResultsTable({
                           {row.semantic_distance?.toFixed(3) ?? '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-gray-500 max-w-xs truncate" title={closestMatch?.item}>
-                        {closestMatch?.item || '—'}
+                      <td className="px-4 py-2.5 text-gray-500 max-w-xs" title={closestMatch?.item}>
+                        <span className="truncate block">{closestMatch?.item || '—'}</span>
+                        {showIntentColumns && closestMatch?.intent && (
+                          <p className="text-xs text-gray-400 mt-0.5 truncate" title={closestMatch.intent}>
+                            {closestMatch.intent}
+                          </p>
+                        )}
                       </td>
                       {completedExecs.map((e) => {
                         const val = filterResultsMap[e.execution_id]?.[row.keyword_text]

@@ -36,6 +36,7 @@ function ServiceRow({ label, connected, loading }) {
 // ---------------------------------------------------------------------------
 
 const PROMPT_TABS = [
+  { key: 'google_ads_account_keywords_intent_prompt', label: 'Account Keywords' },
   { key: 'google_ads_keywords_intent_prompt',         label: 'Keyword Planner (URL)' },
   { key: 'google_ads_keyword_planner_intent_prompt',  label: 'Keyword Planner (Account)' },
   { key: 'google_ads_search_terms_intent_prompt',     label: 'Search Terms' },
@@ -291,7 +292,8 @@ export default function SettingsPage() {
           <p className="text-sm text-gray-500 mt-1">
             These prompts instruct the LLM how to convert each dataset item into a normalized intent string
             (e.g. "I am a consumer looking for X") before embedding and semantic comparison.
-            Changes apply to the next gap analysis run — existing results are not affected.
+            Only applies when <span className="font-medium text-gray-700">Intent Normalization</span> is enabled on a gap analysis.
+            Changes apply to the next run — existing results are not affected.
           </p>
         </div>
 

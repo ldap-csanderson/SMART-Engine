@@ -51,9 +51,11 @@ export default function CostEstimateBox({
         <div className="flex justify-between items-start gap-4">
           <div className="text-sm text-amber-700 space-y-0.5">
             <p className="font-medium">{uniqueKeywords.toLocaleString()} unique keywords</p>
-            <p className="pl-2 text-xs text-amber-600">
-              LLM (intent generation): ~${analysisBreakdown.llm_cost.toFixed(2)}
-            </p>
+            {analysisBreakdown.llm_cost > 0 && (
+              <p className="pl-2 text-xs text-amber-600">
+                LLM (intent generation): ~${analysisBreakdown.llm_cost.toFixed(2)}
+              </p>
+            )}
             <p className="pl-2 text-xs text-amber-600">
               Embeddings (text-embedding-005): ~${analysisBreakdown.embedding_cost.toFixed(2)}
             </p>
