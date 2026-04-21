@@ -14,8 +14,6 @@ const TYPE_LABELS = {
 
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 
-const PAGE_SIZE = 100
-
 export default function DatasetDetailPage() {
   const { datasetId } = useParams()
   const navigate = useNavigate()
@@ -23,6 +21,7 @@ export default function DatasetDetailPage() {
   const [items, setItems] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(100)
   const [loading, setLoading] = useState(true)
   const [itemsLoading, setItemsLoading] = useState(false)
 
@@ -44,12 +43,12 @@ export default function DatasetDetailPage() {
     }
   }
 
-  const fetchItems = async (p = 0) => {
+  const fetchItems = async (p, ps) => {
     setItemsLoading(true)
     try {
-      const offset = p * PAGE_SIZE
+      const offset = p * ps
       const res = await fetch(
-        `${API_BASE}/api/datasets/${datasetId}/items?limit=${PAGE_SIZE}&offset=${offset}`
+        `${API_BASE}/api/datasets/${datasetId}/items?limit=${ps}&offset=${offset}`
       )
       const data = await res.json()
       setItems(data.items || [])
@@ -63,7 +62,7 @@ export default function DatasetDetailPage() {
 
   useEffect(() => {
     fetchDataset()
-    fetchItems(0)
+    fetchItems(0, 100)
     // Poll while processing
     const interval = setInterval(() => {
       fetchDataset()
@@ -72,8 +71,18 @@ export default function DatasetDetailPage() {
   }, [datasetId])
 
   useEffect(() => {
-    fetchItems(page)
-  }, [page])
+    fetchItems(page, pageSize)
+  }, [page, pageSize])
+
+  const handlePageChange = (newPage) => {
+    setPage(newPage)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handlePageSizeChange = (newSize) => {
+    setPageSize(newSize)
+    setPage(0)
+  }
 
   const handleRename = async (newName) => {
     await fetch(`${API_BASE}/api/datasets/${datasetId}/rename`, {
@@ -85,23 +94,19 @@ export default function DatasetDetailPage() {
   }
 
   const handleDeleteClick = async () => {
-    // Check group membership first
     try {
       const res = await fetch(`${API_BASE}/api/datasets/${datasetId}/groups`)
       const data = await res.json()
       const groups = data.groups || []
       if (groups.length === 0) {
-        // No groups — simple browser confirm
         if (!confirm('Delete this dataset and all its items? This cannot be undone.')) return
         await confirmDelete()
       } else {
-        // Show warning modal listing affected groups
         setAffectedGroups(groups)
         setDeleteModal(true)
       }
     } catch (e) {
       console.error(e)
-      // Fall back to simple confirm on error
       if (!confirm('Delete this dataset and all its items? This cannot be undone.')) return
       await confirmDelete()
     }
@@ -163,7 +168,7 @@ export default function DatasetDetailPage() {
           <span className="text-xs text-gray-400">{totalCount.toLocaleString()} total</span>
         </div>
 
-        {itemsLoading ? (
+        {itemsLoading && items.length === 0 ? (
           <div className="p-6 text-gray-400 text-sm">Loading items…</div>
         ) : items.length === 0 ? (
           <div className="p-6 text-gray-400 text-sm">
@@ -185,7 +190,7 @@ export default function DatasetDetailPage() {
                 )}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className={`divide-y divide-gray-50 ${itemsLoading ? 'opacity-50' : ''}`}>
               {items.map((item, i) => (
                 <tr key={i} className="hover:bg-gray-50">
                   <td className="px-5 py-2.5 text-gray-800 whitespace-pre-wrap max-w-lg">{item.item_text}</td>
@@ -208,16 +213,14 @@ export default function DatasetDetailPage() {
           </table>
         )}
 
-        {totalCount > PAGE_SIZE && (
-          <div className="px-5 py-3 border-t border-gray-100">
-            <PaginationBar
-              page={page}
-              pageSize={PAGE_SIZE}
-              total={totalCount}
-              onPageChange={setPage}
-            />
-          </div>
-        )}
+        <PaginationBar
+          page={page}
+          pageSize={pageSize}
+          totalCount={totalCount}
+          loading={itemsLoading}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
       </div>
 
       {/* Delete confirmation modal — shown when dataset is in one or more groups */}
