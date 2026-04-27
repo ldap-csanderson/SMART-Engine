@@ -19,7 +19,7 @@ from db import (
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 # ---------------------------------------------------------------------------
-# Valid dataset types
+# Constants
 # ---------------------------------------------------------------------------
 
 VALID_TYPES = {
@@ -31,7 +31,6 @@ VALID_TYPES = {
     "text_list",
 }
 
-# Types that require Google Ads API access
 GOOGLE_ADS_TYPES = {
     "google_ads_keywords",
     "google_ads_ad_copy",
@@ -39,6 +38,10 @@ GOOGLE_ADS_TYPES = {
     "google_ads_keyword_planner",
     "google_ads_account_keywords",
 }
+
+# Rows buffered before a BQ flush. Keeps peak memory at ~1-2 MB regardless of
+# total dataset size — each _ingest_* function only holds one batch at a time.
+_INGEST_BATCH = 10_000
 
 # ---------------------------------------------------------------------------
 # Models
@@ -96,21 +99,74 @@ class AccountsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# BQ helpers
+# ---------------------------------------------------------------------------
+
+def _insert_items_to_bq(dataset_id: str, items: List[Dict[str, Any]]):
+    """Insert a batch of items into dataset_items BQ table.
+
+    Called with small batches (≤ _INGEST_BATCH) from each _ingest_* function.
+    Internally chunks at 500 to stay within BQ streaming insert limits.
+    """
+    if not bq_client or not items:
+        return
+    table_id = f"{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for item in items:
+        rows.append({
+            "dataset_id": dataset_id,
+            "item_text": item["item_text"],
+            "added_at": timestamp,
+            "avg_monthly_searches": item.get("avg_monthly_searches"),
+            "competition": item.get("competition"),
+            "competition_index": item.get("competition_index"),
+            "low_top_of_page_bid_usd": item.get("low_top_of_page_bid_usd"),
+            "high_top_of_page_bid_usd": item.get("high_top_of_page_bid_usd"),
+            "source_url": item.get("source_url"),
+        })
+    chunk_size = 500
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i:i + chunk_size]
+        errors = bq_client.insert_rows_json(table_id, chunk)
+        if errors:
+            print(f"❌ BQ insert errors: {errors}")
+        else:
+            print(f"✅ Inserted {len(chunk)} rows to dataset_items")
+
+
+def _count_distinct_items(dataset_id: str) -> int:
+    """Return COUNT(DISTINCT item_text) for a dataset from BQ."""
+    if not bq_client:
+        return 0
+    table = f"`{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}`"
+    rows = list(bq_client.query(
+        f"SELECT COUNT(DISTINCT item_text) FROM {table} WHERE dataset_id = '{dataset_id}'"
+    ).result())
+    return rows[0][0] if rows else 0
+
+
+def _mark_failed(dataset_id: str, error: str):
+    """Update Firestore to mark a dataset as failed."""
+    try:
+        db.collection("datasets").document(dataset_id).update({
+            "status": "failed",
+            "error_message": error,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Google Ads helpers
 # ---------------------------------------------------------------------------
 
 def _get_accessible_accounts(client, customer_id: str) -> List[Dict]:
-    """List all accessible leaf accounts under the configured customer.
-
-    When customer_id is an MCC, the customer_client report enumerates every
-    managed account in the hierarchy.  If it returns nothing (e.g. customer_id
-    is already a leaf), we fall back to querying the account directly.
-    """
+    """List all accessible leaf accounts under the configured customer."""
     ga_service = client.get_service("GoogleAdsService")
     accounts = []
-
     try:
-        # MCC path: customer_client traverses the full account hierarchy
         query = """
             SELECT
               customer_client.id,
@@ -134,7 +190,6 @@ def _get_accessible_accounts(client, customer_id: str) -> List[Dict]:
         print(f"⚠️ customer_client query failed for {customer_id}: {e}")
 
     if not accounts:
-        # Fallback: customer_id may be a leaf account — query it directly
         try:
             query = """
                 SELECT customer.id, customer.descriptive_name, customer.manager
@@ -155,7 +210,7 @@ def _get_accessible_accounts(client, customer_id: str) -> List[Dict]:
 
 
 def _fetch_keyword_ideas_for_url(client, customer_id: str, url: str, retry: int = 0, auth_retry: bool = False) -> List[Dict]:
-    """Fetch keyword planner ideas seeded by a URL."""
+    """Fetch keyword planner ideas seeded by a URL. Returns items for one URL."""
     keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
     request = client.get_type("GenerateKeywordIdeasRequest")
     request.customer_id = customer_id
@@ -182,8 +237,7 @@ def _fetch_keyword_ideas_for_url(client, customer_id: str, url: str, retry: int 
     except GoogleAdsException as ex:
         error_msg = str(ex)
         is_auth_error = (
-            "UNAUTHENTICATED" in error_msg or
-            "401" in error_msg or
+            "UNAUTHENTICATED" in error_msg or "401" in error_msg or
             "invalid_grant" in error_msg or
             "Request had invalid authentication credentials" in error_msg
         )
@@ -196,290 +250,29 @@ def _fetch_keyword_ideas_for_url(client, customer_id: str, url: str, retry: int 
             time.sleep(RETRY_DELAY)
             return _fetch_keyword_ideas_for_url(client, customer_id, url, retry + 1, auth_retry)
         return []
-    except Exception as ex:
+    except Exception:
         if retry < MAX_RETRIES:
             time.sleep(RETRY_DELAY)
             return _fetch_keyword_ideas_for_url(client, customer_id, url, retry + 1, auth_retry)
         return []
 
 
-def _fetch_ad_copy(client, customer_id: str, account_ids: List[str]) -> List[Dict]:
-    """Fetch ad copy (RSA + ETA) from the given accounts."""
-    ga_service = client.get_service("GoogleAdsService")
-    target_ids = account_ids if account_ids else [customer_id]
-    items = []
-    seen = set()
-
-    query = """
-        SELECT
-          ad_group_ad.ad.id,
-          ad_group_ad.ad.type,
-          ad_group_ad.ad.responsive_search_ad.headlines,
-          ad_group_ad.ad.responsive_search_ad.descriptions,
-          ad_group_ad.ad.expanded_text_ad.headline_part1,
-          ad_group_ad.ad.expanded_text_ad.headline_part2,
-          ad_group_ad.ad.expanded_text_ad.headline_part3,
-          ad_group_ad.ad.expanded_text_ad.description,
-          ad_group_ad.ad.expanded_text_ad.description2
-        FROM ad_group_ad
-        WHERE ad_group_ad.status != 'REMOVED'
-    """
-
-    for acct_id in target_ids:
-        try:
-            response = ga_service.search(customer_id=acct_id, query=query)
-            for row in response:
-                ad = row.ad_group_ad.ad
-                ad_type = ad.type_.name if hasattr(ad.type_, 'name') else str(ad.type_)
-                lines = []
-
-                if "RESPONSIVE_SEARCH_AD" in ad_type:
-                    rsa = ad.responsive_search_ad
-                    for i, asset in enumerate(rsa.headlines, 1):
-                        text = asset.text.strip() if asset.text else ""
-                        if text:
-                            lines.append(f"Headline{i}: {text}")
-                    for i, asset in enumerate(rsa.descriptions, 1):
-                        text = asset.text.strip() if asset.text else ""
-                        if text:
-                            lines.append(f"Description{i}: {text}")
-                elif "EXPANDED_TEXT_AD" in ad_type:
-                    eta = ad.expanded_text_ad
-                    for i, part in enumerate([eta.headline_part1, eta.headline_part2, eta.headline_part3], 1):
-                        if part and part.strip():
-                            lines.append(f"Headline{i}: {part.strip()}")
-                    for i, desc in enumerate([eta.description, eta.description2], 1):
-                        if desc and desc.strip():
-                            lines.append(f"Description{i}: {desc.strip()}")
-
-                if lines:
-                    item_text = "\n".join(lines)
-                    if item_text not in seen:
-                        seen.add(item_text)
-                        items.append({"item_text": item_text})
-        except Exception as e:
-            print(f"⚠️ Could not fetch ad copy from account {acct_id}: {e}")
-
-    return items
-
-
-# Per-account gRPC timeout for search terms streaming (seconds).
-# Large accounts can return 50k+ rows; 180s gives ~3s per 1k rows headroom.
-_SEARCH_TERMS_TIMEOUT_S = 180
-
-def _fetch_search_terms(client, customer_id: str, account_ids: List[str], date_range_days: int = 90) -> List[Dict]:
-    """Fetch search terms report from the given accounts."""
-    from datetime import timedelta
-    ga_service = client.get_service("GoogleAdsService")
-    target_ids = account_ids if account_ids else [customer_id]
-    items = []
-    seen = set()
-
-    # Use explicit date range instead of DURING LAST_N_DAYS — GAQL only supports
-    # a fixed set of DURING literals (LAST_7_DAYS, LAST_14_DAYS, LAST_30_DAYS …)
-    # and does NOT support LAST_60_DAYS / LAST_90_DAYS / LAST_180_DAYS.
-    start_date = (datetime.now(timezone.utc) - timedelta(days=date_range_days)).strftime('%Y-%m-%d')
-    end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-
-    query = f"""
-        SELECT
-          search_term_view.search_term,
-          metrics.impressions
-        FROM search_term_view
-        WHERE segments.date >= '{start_date}'
-          AND segments.date <= '{end_date}'
-          AND search_term_view.status != 'EXCLUDED'
-        ORDER BY metrics.impressions DESC
-    """
-
-    for i, acct_id in enumerate(target_ids, 1):
-        acct_start = len(items)
-        try:
-            print(f"[{i}/{len(target_ids)}] Fetching search terms from account {acct_id}…")
-            response = ga_service.search(
-                customer_id=acct_id,
-                query=query,
-                timeout=_SEARCH_TERMS_TIMEOUT_S,
-            )
-            for row in response:
-                term = row.search_term_view.search_term.strip()
-                if term and term not in seen:
-                    seen.add(term)
-                    items.append({"item_text": term})
-            print(f"[{i}/{len(target_ids)}] Account {acct_id}: {len(items) - acct_start} new terms (total {len(items)})")
-        except Exception as e:
-            print(f"⚠️ Could not fetch search terms from account {acct_id}: {e}")
-
-    return items
-
-
-def _fetch_keyword_planner_account(client, customer_id: str, account_ids: List[str]) -> List[Dict]:
-    """Fetch keyword planner ideas at account level (no URL seed)."""
-    ga_service = client.get_service("GoogleAdsService")
-    target_ids = account_ids if account_ids else [customer_id]
-    keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
-    items = []
-    seen = set()
-
-    for acct_id in target_ids:
-        try:
-            # Get existing keywords from the account to use as seeds
-            query = """
-                SELECT ad_group_criterion.keyword.text
-                FROM ad_group_criterion
-                WHERE ad_group_criterion.type = 'KEYWORD'
-                  AND ad_group_criterion.status != 'REMOVED'
-                LIMIT 20
-            """
-            response = ga_service.search(customer_id=acct_id, query=query)
-            seed_keywords = [row.ad_group_criterion.keyword.text for row in response if row.ad_group_criterion.keyword.text]
-
-            if not seed_keywords:
-                continue
-
-            request = client.get_type("GenerateKeywordIdeasRequest")
-            request.customer_id = acct_id
-            request.keyword_seed.keywords.extend(seed_keywords[:20])
-            request.language = client.get_service("GoogleAdsService").language_constant_path("1000")
-            request.geo_target_constants.append(
-                client.get_service("GoogleAdsService").geo_target_constant_path("2840")
-            )
-
-            ideas_response = keyword_plan_idea_service.generate_keyword_ideas(request=request)
-            for idea in ideas_response:
-                m = idea.keyword_idea_metrics
-                kw = idea.text.strip()
-                if kw and kw not in seen:
-                    seen.add(kw)
-                    items.append({
-                        "item_text": kw,
-                        "avg_monthly_searches": m.avg_monthly_searches if m else None,
-                        "competition": m.competition.name if m and m.competition else None,
-                        "competition_index": m.competition_index if m else None,
-                        "low_top_of_page_bid_usd": m.low_top_of_page_bid_micros / 1_000_000 if m and m.low_top_of_page_bid_micros else None,
-                        "high_top_of_page_bid_usd": m.high_top_of_page_bid_micros / 1_000_000 if m and m.high_top_of_page_bid_micros else None,
-                    })
-        except Exception as e:
-            print(f"⚠️ Could not fetch keyword planner data from account {acct_id}: {e}")
-
-    return items
-
-
-def _fetch_account_keywords(client, customer_id: str, account_ids: List[str]) -> List[Dict]:
-    """Fetch actual keywords from Google Ads accounts via ad_group_criterion.
-
-    Returns ENABLED and PAUSED keywords (excludes REMOVED).
-    Deduplicates by keyword text across all accounts.
-    """
-    ga_service = client.get_service("GoogleAdsService")
-    target_ids = account_ids if account_ids else [customer_id]
-    items = []
-    seen = set()
-
-    query = """
-        SELECT
-          ad_group_criterion.keyword.text,
-          ad_group_criterion.keyword.match_type,
-          ad_group_criterion.status
-        FROM ad_group_criterion
-        WHERE ad_group_criterion.type = 'KEYWORD'
-          AND ad_group_criterion.status != 'REMOVED'
-          AND campaign.status != 'REMOVED'
-          AND ad_group.status != 'REMOVED'
-    """
-
-    for i, acct_id in enumerate(target_ids, 1):
-        acct_start = len(items)
-        try:
-            print(f"[{i}/{len(target_ids)}] Fetching account keywords from account {acct_id}…")
-            response = ga_service.search(customer_id=acct_id, query=query)
-            for row in response:
-                kw = row.ad_group_criterion.keyword.text.strip().lower()
-                if kw and kw not in seen:
-                    seen.add(kw)
-                    items.append({"item_text": kw})
-            print(f"[{i}/{len(target_ids)}] Account {acct_id}: {len(items) - acct_start} new keywords (total {len(items)})")
-        except Exception as e:
-            print(f"⚠️ Could not fetch keywords from account {acct_id}: {e}")
-
-    return items
-
-
-def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
-    """Background: fetch actual keywords from Google Ads accounts."""
-    client = get_ga_client()
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
-    account_ids = source_config.get("account_ids", [])
-    try:
-        if client is None:
-            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
-        # Auto-discover leaf accounts if none specified (same safety net as search terms)
-        if not account_ids:
-            discovered = _get_accessible_accounts(client, customer_id)
-            account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
-            print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
-            if not account_ids:
-                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
-        items = _fetch_account_keywords(client, customer_id, account_ids)
-        _insert_items_to_bq(dataset_id, items)
-        db.collection("datasets").document(dataset_id).update({
-            "status": "completed",
-            "item_count": len(items),
-            "updated_at": firestore.SERVER_TIMESTAMP,
-        })
-        print(f"✅ Dataset {dataset_id} (google_ads_account_keywords) completed — {len(items)} items")
-    except Exception as e:
-        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# BQ helpers
-# ---------------------------------------------------------------------------
-
-def _insert_items_to_bq(dataset_id: str, items: List[Dict[str, Any]]):
-    """Insert items into dataset_items BQ table."""
-    if not bq_client or not items:
-        return
-    table_id = f"{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}"
-    timestamp = datetime.now(timezone.utc).isoformat()
-    rows = []
-    for item in items:
-        rows.append({
-            "dataset_id": dataset_id,
-            "item_text": item["item_text"],
-            "added_at": timestamp,
-            "avg_monthly_searches": item.get("avg_monthly_searches"),
-            "competition": item.get("competition"),
-            "competition_index": item.get("competition_index"),
-            "low_top_of_page_bid_usd": item.get("low_top_of_page_bid_usd"),
-            "high_top_of_page_bid_usd": item.get("high_top_of_page_bid_usd"),
-            "source_url": item.get("source_url"),
-        })
-    # Insert in chunks of 500 to stay within BQ streaming limits
-    chunk_size = 500
-    for i in range(0, len(rows), chunk_size):
-        chunk = rows[i:i + chunk_size]
-        errors = bq_client.insert_rows_json(table_id, chunk)
-        if errors:
-            print(f"❌ BQ insert errors: {errors}")
-        else:
-            print(f"✅ Inserted {len(chunk)} items to BQ dataset_items")
-
-
 # ---------------------------------------------------------------------------
 # Background ingestion tasks
+#
+# Uniform pattern for all Google Ads types:
+#   • Stream rows from the GA API and buffer in `batch` (max _INGEST_BATCH rows)
+#   • Flush to BQ whenever the batch is full — never accumulate the whole dataset
+#   • No in-memory dedup (`seen` set) — dedup happens at read time in get_dataset_items
+#   • Final item_count = COUNT(DISTINCT item_text) queried from BQ
 # ---------------------------------------------------------------------------
 
 def _ingest_google_ads_keywords(dataset_id: str, source_config: Dict):
-    """Background: fetch keyword planner results for URL-seeded dataset."""
+    """Background: fetch keyword planner results for URL-seeded dataset.
+
+    Flushes to BQ per-batch across URLs so even hundreds of thousands of URLs
+    with millions of total ideas never accumulate in memory.
+    """
     client = get_ga_client()
     urls = source_config.get("urls", [])
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
@@ -487,163 +280,364 @@ def _ingest_google_ads_keywords(dataset_id: str, source_config: Dict):
     try:
         if client is None:
             raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        batch: List[Dict] = []
         for i, url in enumerate(urls):
             print(f"[{i+1}/{len(urls)}] Fetching keyword ideas for: {url}")
             items = _fetch_keyword_ideas_for_url(client, customer_id, url)
-            _insert_items_to_bq(dataset_id, items)
-            total += len(items)
+            for item in items:
+                batch.append(item)
+                if len(batch) >= _INGEST_BATCH:
+                    _insert_items_to_bq(dataset_id, batch)
+                    total += len(batch)
+                    batch = []
             if i < len(urls) - 1:
                 time.sleep(1)
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
-            "item_count": total,
+            "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (google_ads_keywords) completed — {total} items")
+        print(f"✅ Dataset {dataset_id} (google_ads_keywords) completed — {count} distinct items ({total} raw)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
+        _mark_failed(dataset_id, str(e))
 
 
 def _ingest_google_ads_ad_copy(dataset_id: str, source_config: Dict):
-    """Background: fetch ad copy from Google Ads accounts."""
+    """Background: fetch ad copy (RSA + ETA) from Google Ads accounts.
+
+    Streams rows per-account, flushing to BQ in batches of _INGEST_BATCH.
+    """
     client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
+    total = 0
     try:
         if client is None:
             raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
-        items = _fetch_ad_copy(client, customer_id, account_ids)
-        _insert_items_to_bq(dataset_id, items)
+        ga_service = client.get_service("GoogleAdsService")
+        target_ids = account_ids if account_ids else [customer_id]
+        query = """
+            SELECT
+              ad_group_ad.ad.id,
+              ad_group_ad.ad.type,
+              ad_group_ad.ad.responsive_search_ad.headlines,
+              ad_group_ad.ad.responsive_search_ad.descriptions,
+              ad_group_ad.ad.expanded_text_ad.headline_part1,
+              ad_group_ad.ad.expanded_text_ad.headline_part2,
+              ad_group_ad.ad.expanded_text_ad.headline_part3,
+              ad_group_ad.ad.expanded_text_ad.description,
+              ad_group_ad.ad.expanded_text_ad.description2
+            FROM ad_group_ad
+            WHERE ad_group_ad.status != 'REMOVED'
+        """
+        batch: List[Dict] = []
+        for acct_id in target_ids:
+            try:
+                response = ga_service.search(customer_id=acct_id, query=query)
+                for row in response:
+                    ad = row.ad_group_ad.ad
+                    ad_type = ad.type_.name if hasattr(ad.type_, 'name') else str(ad.type_)
+                    lines = []
+                    if "RESPONSIVE_SEARCH_AD" in ad_type:
+                        rsa = ad.responsive_search_ad
+                        for i, asset in enumerate(rsa.headlines, 1):
+                            text = asset.text.strip() if asset.text else ""
+                            if text:
+                                lines.append(f"Headline{i}: {text}")
+                        for i, asset in enumerate(rsa.descriptions, 1):
+                            text = asset.text.strip() if asset.text else ""
+                            if text:
+                                lines.append(f"Description{i}: {text}")
+                    elif "EXPANDED_TEXT_AD" in ad_type:
+                        eta = ad.expanded_text_ad
+                        for i, part in enumerate([eta.headline_part1, eta.headline_part2, eta.headline_part3], 1):
+                            if part and part.strip():
+                                lines.append(f"Headline{i}: {part.strip()}")
+                        for i, desc in enumerate([eta.description, eta.description2], 1):
+                            if desc and desc.strip():
+                                lines.append(f"Description{i}: {desc.strip()}")
+                    if lines:
+                        batch.append({"item_text": "\n".join(lines)})
+                        if len(batch) >= _INGEST_BATCH:
+                            _insert_items_to_bq(dataset_id, batch)
+                            total += len(batch)
+                            batch = []
+            except Exception as e:
+                print(f"⚠️ Could not fetch ad copy from account {acct_id}: {e}")
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
-            "item_count": len(items),
+            "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (google_ads_ad_copy) completed — {len(items)} items")
+        print(f"✅ Dataset {dataset_id} (google_ads_ad_copy) completed — {count} distinct items ({total} raw)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
+        _mark_failed(dataset_id, str(e))
 
+
+_SEARCH_TERMS_TIMEOUT_S = 180
 
 def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
-    """Background: fetch search terms report from Google Ads accounts."""
+    """Background: fetch search terms report from Google Ads accounts.
+
+    Streams rows per-account, flushing to BQ in batches of _INGEST_BATCH.
+    """
+    from datetime import timedelta
     client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
     date_range_days = source_config.get("date_range_days", 90)
+    total = 0
     try:
         if client is None:
             raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
-        # If no account_ids were provided, auto-discover all leaf accounts.
-        # Falling back to the MCC CID directly will fail for search_term_view.
         if not account_ids:
             discovered = _get_accessible_accounts(client, customer_id)
             account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
             print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
             if not account_ids:
                 raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
-        items = _fetch_search_terms(client, customer_id, account_ids, date_range_days)
-        _insert_items_to_bq(dataset_id, items)
+
+        ga_service = client.get_service("GoogleAdsService")
+        start_date = (datetime.now(timezone.utc) - timedelta(days=date_range_days)).strftime('%Y-%m-%d')
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        query = f"""
+            SELECT
+              search_term_view.search_term,
+              metrics.impressions
+            FROM search_term_view
+            WHERE segments.date >= '{start_date}'
+              AND segments.date <= '{end_date}'
+              AND search_term_view.status != 'EXCLUDED'
+            ORDER BY metrics.impressions DESC
+        """
+        batch: List[Dict] = []
+        for i, acct_id in enumerate(account_ids, 1):
+            acct_raw = 0
+            try:
+                print(f"[{i}/{len(account_ids)}] Fetching search terms from account {acct_id}…")
+                response = ga_service.search(
+                    customer_id=acct_id,
+                    query=query,
+                    timeout=_SEARCH_TERMS_TIMEOUT_S,
+                )
+                for row in response:
+                    term = row.search_term_view.search_term.strip()
+                    if term:
+                        batch.append({"item_text": term})
+                        acct_raw += 1
+                        if len(batch) >= _INGEST_BATCH:
+                            _insert_items_to_bq(dataset_id, batch)
+                            total += len(batch)
+                            batch = []
+                print(f"[{i}/{len(account_ids)}] Account {acct_id}: {acct_raw} terms")
+            except Exception as e:
+                print(f"⚠️ Could not fetch search terms from account {acct_id}: {e}")
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
-            "item_count": len(items),
+            "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (google_ads_search_terms) completed — {len(items)} items")
+        print(f"✅ Dataset {dataset_id} (google_ads_search_terms) completed — {count} distinct items ({total} raw)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
+        _mark_failed(dataset_id, str(e))
 
 
 def _ingest_google_ads_keyword_planner(dataset_id: str, source_config: Dict):
-    """Background: fetch keyword planner ideas at account level."""
+    """Background: fetch keyword planner ideas at account level.
+
+    Streams ideas per-account, flushing to BQ in batches of _INGEST_BATCH.
+    """
     client = get_ga_client()
     customer_id = source_config.get("customer_id", CUSTOMER_ID)
     account_ids = source_config.get("account_ids", [])
+    total = 0
     try:
         if client is None:
             raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
-        items = _fetch_keyword_planner_account(client, customer_id, account_ids)
-        _insert_items_to_bq(dataset_id, items)
+        ga_service = client.get_service("GoogleAdsService")
+        keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
+        target_ids = account_ids if account_ids else [customer_id]
+        batch: List[Dict] = []
+        for acct_id in target_ids:
+            try:
+                # Seed with up to 20 existing keywords from the account
+                seed_query = """
+                    SELECT ad_group_criterion.keyword.text
+                    FROM ad_group_criterion
+                    WHERE ad_group_criterion.type = 'KEYWORD'
+                      AND ad_group_criterion.status != 'REMOVED'
+                    LIMIT 20
+                """
+                seed_response = ga_service.search(customer_id=acct_id, query=seed_query)
+                seed_keywords = [
+                    row.ad_group_criterion.keyword.text
+                    for row in seed_response
+                    if row.ad_group_criterion.keyword.text
+                ]
+                if not seed_keywords:
+                    continue
+                request = client.get_type("GenerateKeywordIdeasRequest")
+                request.customer_id = acct_id
+                request.keyword_seed.keywords.extend(seed_keywords[:20])
+                request.language = ga_service.language_constant_path("1000")
+                request.geo_target_constants.append(ga_service.geo_target_constant_path("2840"))
+                ideas_response = keyword_plan_idea_service.generate_keyword_ideas(request=request)
+                for idea in ideas_response:
+                    m = idea.keyword_idea_metrics
+                    kw = idea.text.strip()
+                    if kw:
+                        batch.append({
+                            "item_text": kw,
+                            "avg_monthly_searches": m.avg_monthly_searches if m else None,
+                            "competition": m.competition.name if m and m.competition else None,
+                            "competition_index": m.competition_index if m else None,
+                            "low_top_of_page_bid_usd": m.low_top_of_page_bid_micros / 1_000_000 if m and m.low_top_of_page_bid_micros else None,
+                            "high_top_of_page_bid_usd": m.high_top_of_page_bid_micros / 1_000_000 if m and m.high_top_of_page_bid_micros else None,
+                        })
+                        if len(batch) >= _INGEST_BATCH:
+                            _insert_items_to_bq(dataset_id, batch)
+                            total += len(batch)
+                            batch = []
+            except Exception as e:
+                print(f"⚠️ Could not fetch keyword planner data from account {acct_id}: {e}")
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
-            "item_count": len(items),
+            "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (google_ads_keyword_planner) completed — {len(items)} items")
+        print(f"✅ Dataset {dataset_id} (google_ads_keyword_planner) completed — {count} distinct items ({total} raw)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
+        _mark_failed(dataset_id, str(e))
+
+
+def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
+    """Background: fetch actual keywords from Google Ads accounts.
+
+    Streams rows per-account, flushing to BQ in batches of _INGEST_BATCH.
+    """
+    client = get_ga_client()
+    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    account_ids = source_config.get("account_ids", [])
+    total = 0
+    try:
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+        if not account_ids:
+            discovered = _get_accessible_accounts(client, customer_id)
+            account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
+            print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
+            if not account_ids:
+                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
+
+        ga_service = client.get_service("GoogleAdsService")
+        query = """
+            SELECT
+              ad_group_criterion.keyword.text,
+              ad_group_criterion.keyword.match_type,
+              ad_group_criterion.status
+            FROM ad_group_criterion
+            WHERE ad_group_criterion.type = 'KEYWORD'
+              AND ad_group_criterion.status != 'REMOVED'
+              AND campaign.status != 'REMOVED'
+              AND ad_group.status != 'REMOVED'
+        """
+        batch: List[Dict] = []
+        for i, acct_id in enumerate(account_ids, 1):
+            acct_raw = 0
+            try:
+                print(f"[{i}/{len(account_ids)}] Fetching account keywords from account {acct_id}…")
+                response = ga_service.search(customer_id=acct_id, query=query)
+                for row in response:
+                    kw = row.ad_group_criterion.keyword.text.strip().lower()
+                    if kw:
+                        batch.append({"item_text": kw})
+                        acct_raw += 1
+                        if len(batch) >= _INGEST_BATCH:
+                            _insert_items_to_bq(dataset_id, batch)
+                            total += len(batch)
+                            batch = []
+                print(f"[{i}/{len(account_ids)}] Account {acct_id}: {acct_raw} keywords")
+            except Exception as e:
+                print(f"⚠️ Could not fetch keywords from account {acct_id}: {e}")
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
+        db.collection("datasets").document(dataset_id).update({
+            "status": "completed",
+            "item_count": count,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        print(f"✅ Dataset {dataset_id} (google_ads_account_keywords) completed — {count} distinct items ({total} raw)")
+    except Exception as e:
+        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
+        _mark_failed(dataset_id, str(e))
 
 
 def _ingest_text_list(dataset_id: str, items: List[str]):
-    """Background: insert text_list items into BQ."""
+    """Background: insert text_list items into BQ in batches."""
+    total = 0
     try:
-        bq_items = [{"item_text": item.strip()} for item in items if item.strip()]
-        _insert_items_to_bq(dataset_id, bq_items)
+        batch: List[Dict] = []
+        for item in items:
+            t = item.strip()
+            if t:
+                batch.append({"item_text": t})
+                if len(batch) >= _INGEST_BATCH:
+                    _insert_items_to_bq(dataset_id, batch)
+                    total += len(batch)
+                    batch = []
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
-            "item_count": len(bq_items),
+            "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (text_list) completed — {len(bq_items)} items")
+        print(f"✅ Dataset {dataset_id} (text_list) completed — {count} distinct items ({total} raw)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
-        try:
-            db.collection("datasets").document(dataset_id).update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            })
-        except Exception:
-            pass
+        _mark_failed(dataset_id, str(e))
 
 
 # ---------------------------------------------------------------------------
-# Startup helpers
+# Startup: recover datasets stuck in 'processing' after container crash/OOM
 # ---------------------------------------------------------------------------
 
 def resume_stuck_datasets(stuck_after_minutes: int = 10):
     """On startup, mark any datasets stuck in 'processing' as failed.
 
-    Called from api.py lifespan so that a container crash or gRPC hang
-    from a previous revision doesn't leave datasets in limbo forever.
+    Called from api.py lifespan so that a container crash or OOM kill from a
+    previous revision doesn't leave datasets in limbo forever.
 
-    Uses a short cutoff (10 min) so that OOM-killed containers don't leave
+    Uses a short cutoff (10 min) so OOM-killed containers don't leave
     datasets stuck — a container restart happens in seconds, so any dataset
     still 'processing' after 10 minutes survived a crash and must be retried.
-    Dataset ingestion jobs themselves (GA API fetches) typically finish in
-    well under 10 minutes; if they genuinely need longer the caller can raise
-    stuck_after_minutes.
+    Checks updated_at (last Firestore write) rather than created_at so that
+    a legitimately long-running job which updates the doc periodically isn't
+    incorrectly failed.
     """
     if not db:
         return
@@ -653,9 +647,6 @@ def resume_stuck_datasets(stuck_after_minutes: int = 10):
         stuck = []
         for doc in db.collection("datasets").where("status", "==", "processing").stream():
             d = doc.to_dict()
-            # Prefer updated_at so we don't incorrectly fail a legitimately
-            # long-running job that has been making progress (updating the doc).
-            # Fall back to created_at if updated_at is missing.
             ts = d.get("updated_at") or d.get("created_at")
             if ts:
                 if hasattr(ts, "tzinfo") and ts.tzinfo is None:
@@ -689,7 +680,6 @@ def list_accounts():
     try:
         accounts = _get_accessible_accounts(client, CUSTOMER_ID)
         is_mcc = any(a["is_manager"] for a in accounts)
-        # Filter out manager accounts from the selectable list
         leaf_accounts = [a for a in accounts if not a["is_manager"]]
         return AccountsResponse(
             accounts=[AccountInfo(**a) for a in leaf_accounts],
@@ -754,12 +744,10 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
     dataset_id = str(uuid.uuid4())
     source_config = payload.source_config or {}
 
-    # Inject customer_id into source_config for all Google Ads types (spec §1.4)
     if payload.type in GOOGLE_ADS_TYPES:
         source_config = {"customer_id": CUSTOMER_ID, **source_config}
 
-    # Deduplicate text_list items — do NOT store them in Firestore (1MB doc limit).
-    # Items are written to BigQuery by _ingest_text_list in the background.
+    # Deduplicate text_list items up-front — do NOT store in Firestore (1MB doc limit).
     items_to_ingest = None
     if payload.type == "text_list":
         items_to_ingest = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
@@ -775,10 +763,8 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         "updated_at": firestore.SERVER_TIMESTAMP,
         "error_message": None,
     }
-
     db.collection("datasets").document(dataset_id).set(doc_data)
 
-    # Trigger background ingestion
     if payload.type == "google_ads_keywords":
         background_tasks.add_task(_ingest_google_ads_keywords, dataset_id, source_config)
     elif payload.type == "google_ads_ad_copy":
@@ -838,7 +824,12 @@ def get_dataset_items(
     order_by: str = "avg_monthly_searches",
     order_dir: str = "DESC",
 ):
-    """Get paginated items for a dataset from BigQuery."""
+    """Get paginated items for a dataset from BigQuery.
+
+    Uses QUALIFY ROW_NUMBER() PARTITION BY item_text to deduplicate at read
+    time, so users never see duplicate keywords even if the same item was
+    inserted multiple times during ingestion (e.g. same keyword across accounts).
+    """
     if not db or not bq_client:
         raise HTTPException(503, "Service not initialized")
 
@@ -863,6 +854,7 @@ def get_dataset_items(
                low_top_of_page_bid_usd, high_top_of_page_bid_usd, source_url, added_at
         FROM {table}
         WHERE dataset_id = '{dataset_id}'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY item_text ORDER BY added_at DESC) = 1
         ORDER BY {order_by} {order_dir} NULLS LAST
         LIMIT {limit} OFFSET {offset}
     """).result()
@@ -950,7 +942,6 @@ def delete_dataset(dataset_id: str):
     if not ref.get().exists:
         raise HTTPException(404, f"Dataset {dataset_id} not found")
 
-    # Delete BQ rows (best effort)
     if bq_client:
         try:
             bq_client.query(
@@ -969,7 +960,6 @@ def delete_dataset(dataset_id: str):
 
     ref.delete()
 
-    # Cascade: remove dataset_id from any groups that contain it
     try:
         for doc in db.collection("dataset_groups").stream():
             d = doc.to_dict()
