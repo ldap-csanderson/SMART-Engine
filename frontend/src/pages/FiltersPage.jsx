@@ -1,136 +1,106 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import NewFilterModal from '../components/NewFilterModal'
+import API_BASE from '../config'
 
 export default function FiltersPage() {
-  const navigate = useNavigate()
   const [filters, setFilters] = useState([])
   const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [actionLoading, setActionLoading] = useState({})
+  const [deleting, setDeleting] = useState({})
 
-  const fetchFilters = async (isInitial = false) => {
-    if (isInitial) setLoading(true)
+  const fetchFilters = async () => {
     try {
-      const response = await fetch('/api/filters')
-      const data = await response.json()
+      const res = await fetch(`${API_BASE}/api/filters`)
+      const data = await res.json()
       setFilters(data.filters || [])
     } catch (err) {
       console.error('Failed to fetch filters:', err)
     } finally {
-      if (isInitial) setLoading(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchFilters(true)
+    fetchFilters()
   }, [])
 
-  const handleDelete = async (filterId, filterName) => {
+  const handleDelete = async (e, filterId, filterName) => {
+    e.preventDefault()
+    e.stopPropagation()
     if (!window.confirm(`Delete filter "${filterName}"? This cannot be undone.`)) return
-
-    setActionLoading((prev) => ({ ...prev, [filterId]: true }))
+    setDeleting((prev) => ({ ...prev, [filterId]: true }))
     try {
-      const response = await fetch(`/api/filters/${filterId}`, { method: 'DELETE' })
-      if (!response.ok) throw new Error('Failed to delete')
+      const res = await fetch(`${API_BASE}/api/filters/${filterId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete')
       setFilters((prev) => prev.filter((f) => f.filter_id !== filterId))
     } catch (err) {
       alert(`Error: ${err.message}`)
     } finally {
-      setActionLoading((prev) => ({ ...prev, [filterId]: false }))
+      setDeleting((prev) => ({ ...prev, [filterId]: false }))
     }
   }
 
-  const handleCreated = () => {
-    fetchFilters()
-  }
-
   return (
-    <div className="bg-gray-50">
-      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Filters</h1>
-            <p className="mt-2 text-gray-600">Manage your keyword filters</p>
-          </div>
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm"
-          >
-            + New Filter
-          </button>
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Filters</h1>
+          <p className="text-sm text-gray-500 mt-1">Keyword filters for gap analysis results</p>
         </div>
-
-        {/* Filters List */}
-        {loading ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-3 text-gray-500">Loading filters...</p>
-          </div>
-        ) : filters.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            <div className="flex flex-col items-center">
-              <button
-                onClick={() => setIsModalOpen(true)}
-                className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-sm mb-4"
-              >
-                + New Filter
-              </button>
-              <p className="text-gray-500">No filters yet — create your first filter</p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {filters.map((filter) => (
-              <div
-                key={filter.filter_id}
-                className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-lg font-semibold text-gray-900">{filter.name}</h3>
-                      {filter.label && (
-                        <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-800">
-                          {filter.label}
-                        </span>
-                      )}
-                    </div>
-                    {filter.text && (
-                      <p className="text-sm text-gray-600 line-clamp-3 mt-1">{filter.text}</p>
-                    )}
-                  </div>
-
-                  <div className="flex gap-2 ml-4 flex-shrink-0">
-                    <button
-                      onClick={() => navigate(`/filters/${filter.filter_id}`)}
-                      className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      onClick={() => handleDelete(filter.filter_id, filter.name)}
-                      disabled={actionLoading[filter.filter_id]}
-                      className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {actionLoading[filter.filter_id] ? 'Deleting...' : 'Delete'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* New Filter Modal */}
-        <NewFilterModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          onCreated={handleCreated}
-        />
+        <button
+          onClick={() => setIsModalOpen(true)}
+          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
+        >
+          + New Filter
+        </button>
       </div>
+
+      {loading ? (
+        <div className="text-gray-500 text-sm">Loading...</div>
+      ) : filters.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-lg">No filters yet</p>
+          <p className="text-sm mt-1">Create a filter to classify gap analysis results</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+          {filters.map((filter) => (
+            <Link
+              key={filter.filter_id}
+              to={`/filters/${filter.filter_id}`}
+              className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-gray-900 truncate">{filter.name}</p>
+                  {filter.label && (
+                    <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-800 shrink-0">
+                      {filter.label}
+                    </span>
+                  )}
+                </div>
+                {filter.text && (
+                  <p className="text-xs text-gray-400 mt-0.5 truncate max-w-lg">{filter.text}</p>
+                )}
+              </div>
+              <button
+                onClick={(e) => handleDelete(e, filter.filter_id, filter.name)}
+                disabled={deleting[filter.filter_id]}
+                className="text-sm text-red-500 hover:text-red-700 border border-red-200 px-3 py-1.5 rounded-lg shrink-0 ml-4 disabled:opacity-50"
+              >
+                {deleting[filter.filter_id] ? 'Deleting…' : 'Delete'}
+              </button>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      <NewFilterModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onCreated={() => { setIsModalOpen(false); fetchFilters() }}
+      />
     </div>
   )
 }

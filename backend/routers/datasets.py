@@ -632,11 +632,18 @@ def _ingest_text_list(dataset_id: str, items: List[str]):
 # Startup helpers
 # ---------------------------------------------------------------------------
 
-def resume_stuck_datasets(stuck_after_minutes: int = 30):
+def resume_stuck_datasets(stuck_after_minutes: int = 10):
     """On startup, mark any datasets stuck in 'processing' as failed.
 
     Called from api.py lifespan so that a container crash or gRPC hang
     from a previous revision doesn't leave datasets in limbo forever.
+
+    Uses a short cutoff (10 min) so that OOM-killed containers don't leave
+    datasets stuck — a container restart happens in seconds, so any dataset
+    still 'processing' after 10 minutes survived a crash and must be retried.
+    Dataset ingestion jobs themselves (GA API fetches) typically finish in
+    well under 10 minutes; if they genuinely need longer the caller can raise
+    stuck_after_minutes.
     """
     if not db:
         return
@@ -646,12 +653,14 @@ def resume_stuck_datasets(stuck_after_minutes: int = 30):
         stuck = []
         for doc in db.collection("datasets").where("status", "==", "processing").stream():
             d = doc.to_dict()
-            created_at = d.get("created_at")
-            # Firestore timestamps come back as datetime objects
-            if created_at:
-                if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
-                    created_at = created_at.replace(tzinfo=timezone.utc)
-                if created_at < cutoff:
+            # Prefer updated_at so we don't incorrectly fail a legitimately
+            # long-running job that has been making progress (updating the doc).
+            # Fall back to created_at if updated_at is missing.
+            ts = d.get("updated_at") or d.get("created_at")
+            if ts:
+                if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts < cutoff:
                     stuck.append(doc)
         if not stuck:
             print("✅ No stuck datasets found")
@@ -659,7 +668,7 @@ def resume_stuck_datasets(stuck_after_minutes: int = 30):
         for doc in stuck:
             doc.reference.update({
                 "status": "failed",
-                "error_message": "Ingestion was interrupted (container restart or timeout). Please retry.",
+                "error_message": "Ingestion was interrupted (container restart or OOM). Please retry.",
                 "updated_at": firestore.SERVER_TIMESTAMP,
             })
             print(f"⚠️ Marked stuck dataset {doc.id} as failed")
@@ -749,11 +758,11 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
     if payload.type in GOOGLE_ADS_TYPES:
         source_config = {"customer_id": CUSTOMER_ID, **source_config}
 
-    # For text_list, store items directly in Firestore (same as old Portfolio behavior)
-    items_to_store = None
+    # Deduplicate text_list items — do NOT store them in Firestore (1MB doc limit).
+    # Items are written to BigQuery by _ingest_text_list in the background.
+    items_to_ingest = None
     if payload.type == "text_list":
-        unique_items = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
-        items_to_store = unique_items
+        items_to_ingest = list(dict.fromkeys(i.strip() for i in payload.items if i.strip()))
 
     doc_data = {
         "dataset_id": dataset_id,
@@ -766,8 +775,6 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         "updated_at": firestore.SERVER_TIMESTAMP,
         "error_message": None,
     }
-    if items_to_store is not None:
-        doc_data["items"] = items_to_store
 
     db.collection("datasets").document(dataset_id).set(doc_data)
 
@@ -783,7 +790,7 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
     elif payload.type == "google_ads_account_keywords":
         background_tasks.add_task(_ingest_google_ads_account_keywords, dataset_id, source_config)
     elif payload.type == "text_list":
-        background_tasks.add_task(_ingest_text_list, dataset_id, items_to_store)
+        background_tasks.add_task(_ingest_text_list, dataset_id, items_to_ingest)
 
     doc = db.collection("datasets").document(dataset_id).get().to_dict()
     return Dataset(

@@ -73,9 +73,26 @@ export default function GapAnalysisDetailPage() {
 
   const [renaming, setRenaming] = useState(false)
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
+  const [deleteModal, setDeleteModal] = useState(false)
   const loadedFilterResultsRef = useRef(new Set())
   const [expandedRows, setExpandedRows] = useState(new Set())
   const [showCopied, setShowCopied] = useState(false)
+
+  // Poll analysis status every 4s while processing
+  useEffect(() => {
+    if (!analysis || analysis.status !== 'processing') return
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}`)
+        if (!res.ok) return
+        const data = await res.json()
+        setAnalysis(data)
+      } catch (err) {
+        console.error('Poll analysis status error:', err)
+      }
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [analysis?.status, analysisId])
 
   // Poll executions every 2s while any are processing
   useEffect(() => {
@@ -182,44 +199,52 @@ export default function GapAnalysisDetailPage() {
     return `${API_BASE}/api/gap-analyses/${analysisId}/results?${params.toString()}`
   }, [analysisId, filterModes, page, pageSize, orderBy, orderDir, minSearches])
 
-  const [filterModesReady, setFilterModesReady] = useState(false)
-  const [lastUrl, setLastUrl] = useState('')
-
+  // Fetch results whenever query params change — uses AbortController to cancel stale requests
   useEffect(() => {
-    if (Object.keys(filterModes).length > 0 || !pageLoading) setFilterModesReady(true)
-  }, [filterModes, pageLoading])
-
-  useEffect(() => {
-    if (!filterModesReady && pageLoading) return
+    if (pageLoading) return
     if (!analysis) return
-    const url = buildResultsUrl()
-    if (url === lastUrl) return
-    setLastUrl(url)
+
+    const controller = new AbortController()
 
     const fetchResults = async () => {
-      setResultsLoading(true)
       try {
-        const res = await fetch(url)
+        const url = buildResultsUrl()
+        const res = await fetch(url, { signal: controller.signal })
         if (!res.ok) throw new Error('Failed to load results')
         const data = await res.json()
         setResults(data.results || [])
         setTotalCount(data.total_count || 0)
       } catch (err) {
+        if (err.name === 'AbortError') return  // stale request — ignore
         console.error('Results fetch error:', err)
       } finally {
-        setResultsLoading(false)
+        if (!controller.signal.aborted) setResultsLoading(false)
       }
     }
-    fetchResults()
-  }, [filterModes, analysis, filterModesReady, buildResultsUrl, lastUrl])
 
+    fetchResults()
+    return () => controller.abort()
+  }, [pageLoading, analysis, buildResultsUrl])
+
+  // Handlers — set loading immediately so the table reacts without waiting for BQ
   const handleFilterModeChange = (execId, mode) => {
+    setResultsLoading(true)
     setFilterModes((prev) => ({ ...prev, [execId]: mode }))
     setPage(0)
     setExpandedRows(new Set())
   }
 
+  const handleSetAllFilterModes = (mode) => {
+    setResultsLoading(true)
+    const modes = {}
+    completedExecs.forEach((e) => { modes[e.execution_id] = mode })
+    setFilterModes(modes)
+    setPage(0)
+    setExpandedRows(new Set())
+  }
+
   const handleSort = (newOrderBy, newOrderDir) => {
+    setResultsLoading(true)
     setOrderBy(newOrderBy)
     setOrderDir(newOrderDir)
     setPage(0)
@@ -227,31 +252,57 @@ export default function GapAnalysisDetailPage() {
   }
 
   const handlePageChange = (newPage) => {
+    setResultsLoading(true)
     setPage(newPage)
     setExpandedRows(new Set())
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handlePageSizeChange = (newSize) => {
+    setResultsLoading(true)
     setPageSize(newSize)
     setPage(0)
     setExpandedRows(new Set())
   }
 
+  // Optimistic delete — update state immediately, revert on error
   const handleDeleteFilter = async (execId, filterName) => {
     if (!window.confirm(`Delete filter "${filterName}"? This cannot be undone.`)) return
+
+    // Snapshot for rollback
+    const prevExecutions = executions
+    const prevModes = filterModes
+    const prevMap = filterResultsMap
+
+    // Optimistic update — remove immediately
+    setExecutions((prev) => prev.filter((e) => e.execution_id !== execId))
+    setFilterModes((prev) => { const next = { ...prev }; delete next[execId]; return next })
+    setFilterResultsMap((prev) => { const next = { ...prev }; delete next[execId]; return next })
+    loadedFilterResultsRef.current.delete(execId)
+
     try {
       const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/filter-executions/${execId}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw new Error('Failed to delete filter')
-      setExecutions((prev) => prev.filter((e) => e.execution_id !== execId))
-      setFilterModes((prev) => { const next = { ...prev }; delete next[execId]; return next })
-      setFilterResultsMap((prev) => { const next = { ...prev }; delete next[execId]; return next })
-      loadedFilterResultsRef.current.delete(execId)
     } catch (err) {
+      // Revert on failure
+      setExecutions(prevExecutions)
+      setFilterModes(prevModes)
+      setFilterResultsMap(prevMap)
+      loadedFilterResultsRef.current.add(execId)
       alert(`Error deleting filter: ${err.message}`)
     }
+  }
+
+  const handleDeleteClick = () => setDeleteModal(true)
+
+  // Optimistic analysis delete — navigate immediately, fire DELETE in background
+  const confirmDelete = () => {
+    setDeleteModal(false)
+    navigate('/gap-analyses', { state: { deletedId: analysisId } })
+    fetch(`${API_BASE}/api/gap-analyses/${analysisId}`, { method: 'DELETE' })
+      .catch((err) => console.error('Analysis delete failed:', err))
   }
 
   const handleRename = async (newName) => {
@@ -274,6 +325,7 @@ export default function GapAnalysisDetailPage() {
   const handleMinSearchesBlur = () => {
     const v = parseInt(minSearchesInput, 10)
     if (!isNaN(v) && v >= 0) {
+      setResultsLoading(true)
       setMinSearches(v)
       setPage(0)
       setExpandedRows(new Set())
@@ -377,8 +429,18 @@ export default function GapAnalysisDetailPage() {
             </svg>
             Back to Gap Analyses
           </button>
-          <EditableTitle value={analysis.name} onSave={handleRename} saving={renaming} />
-            <div className="flex items-center gap-2 text-sm text-gray-600 mt-1 flex-wrap">
+          <div className="flex items-start justify-between">
+            <div>
+              <EditableTitle value={analysis.name} onSave={handleRename} saving={renaming} />
+            </div>
+            <button
+              onClick={handleDeleteClick}
+              className="text-sm text-red-500 hover:text-red-700 border border-red-200 px-3 py-1.5 rounded-lg shrink-0 ml-4 mt-1"
+            >
+              Delete
+            </button>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-600 mt-1 flex-wrap">
             <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${
               analysis.status === 'completed'  ? 'bg-green-100 text-green-800' :
               analysis.status === 'processing' ? 'bg-blue-100 text-blue-800' :
@@ -397,7 +459,7 @@ export default function GapAnalysisDetailPage() {
               </span>
             )}
             <span>·</span>
-            <span>{totalCount.toLocaleString()} items</span>
+            <span>{analysis.status === 'processing' ? '—' : `${totalCount.toLocaleString()} items`}</span>
             <span>·</span>
             <span className="text-gray-500">
               <span className="font-medium text-gray-700">{analysis.source_dataset_name}</span>
@@ -414,6 +476,20 @@ export default function GapAnalysisDetailPage() {
           </div>
         </div>
 
+        {analysis.status === 'processing' ? (
+          /* Processing placeholder */
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mb-4" />
+            <p className="text-gray-700 font-medium">Analysis in progress…</p>
+            <p className="text-sm text-gray-400 mt-1">
+              {analysis.total_items_analyzed > 0
+                ? `Running embedding pipeline on ${analysis.total_items_analyzed.toLocaleString()} items. This may take several minutes.`
+                : 'Running embedding pipeline. This may take several minutes.'}
+            </p>
+          </div>
+        ) : (
+        <>
+
         {/* Controls panel */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex flex-wrap gap-6 items-start">
@@ -426,13 +502,7 @@ export default function GapAnalysisDetailPage() {
                   {['any', 'true', 'false'].map((mode) => (
                     <button
                       key={mode}
-                      onClick={() => {
-                        const modes = {}
-                        completedExecs.forEach((e) => { modes[e.execution_id] = mode })
-                        setFilterModes(modes)
-                        setPage(0)
-                        setExpandedRows(new Set())
-                      }}
+                      onClick={() => handleSetAllFilterModes(mode)}
                       className={`px-2 py-0.5 text-xs rounded border ${
                         mode === 'any'   ? 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200' :
                         mode === 'true'  ? 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200' :
@@ -618,6 +688,34 @@ export default function GapAnalysisDetailPage() {
           analysisId={analysisId}
           existingExecutions={executions}
         />
+        </>
+        )}
+
+        {/* Delete confirmation modal */}
+        {deleteModal && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">Delete analysis?</h2>
+              <p className="text-sm text-gray-600 mb-6">
+                <strong className="text-gray-800">{analysis.name}</strong> and all its results will be permanently deleted. This cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setDeleteModal(false)}
+                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

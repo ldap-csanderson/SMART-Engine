@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import API_BASE from '../config'
 import NewGapAnalysisModal from '../components/NewGapAnalysisModal'
 
@@ -11,6 +11,11 @@ const STATUS_COLORS = {
 }
 
 export default function GapAnalysesPage() {
+  const location = useLocation()
+  // If we navigated here after deleting an analysis, hide it optimistically
+  // until the server confirms it's gone on the next poll
+  const deletedId = location.state?.deletedId ?? null
+
   const [analyses, setAnalyses] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -33,6 +38,11 @@ export default function GapAnalysesPage() {
     return () => clearInterval(interval)
   }, [])
 
+  // Filter out the optimistically-deleted item from display
+  const visibleAnalyses = deletedId
+    ? analyses.filter((a) => a.analysis_id !== deletedId)
+    : analyses
+
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
       <div className="flex items-center justify-between mb-6">
@@ -52,14 +62,14 @@ export default function GapAnalysesPage() {
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading...</div>
-      ) : analyses.length === 0 ? (
+      ) : visibleAnalyses.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg">No gap analyses yet</p>
           <p className="text-sm mt-1">Create an analysis to find semantic gaps between datasets</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-          {analyses.map(a => (
+          {visibleAnalyses.map(a => (
             <Link
               key={a.analysis_id}
               to={`/gap-analyses/${a.analysis_id}`}
@@ -76,7 +86,11 @@ export default function GapAnalysesPage() {
                 <span className={`font-medium ${STATUS_COLORS[a.status] || 'text-gray-500'}`}>
                   {a.status === 'processing' ? '⏳ processing…' : a.status}
                 </span>
-                <span>{a.total_items_analyzed.toLocaleString()} items</span>
+                <span>
+                  {a.status === 'processing' && a.total_items_analyzed === 0
+                    ? '—'
+                    : `${a.total_items_analyzed.toLocaleString()} items`}
+                </span>
                 <span>{new Date(a.created_at).toLocaleDateString()}</span>
               </div>
             </Link>

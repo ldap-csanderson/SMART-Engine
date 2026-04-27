@@ -318,7 +318,7 @@ def run_gap_analysis_pipeline(
         # Step 2 (direct): embed source item_text directly (no intent step)
         run_bq(f"""
             CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-            SELECT item_text, NULL AS intent_string, ml_generate_embedding_result AS embedding
+            SELECT item_text, CAST(NULL AS STRING) AS intent_string, ml_generate_embedding_result AS embedding
             FROM ML.GENERATE_EMBEDDING(
               MODEL {_m(MODEL_EMBEDDINGS)},
               (
@@ -351,7 +351,7 @@ def run_gap_analysis_pipeline(
                     INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
                       (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
                     SELECT '{did}' AS dataset_id,
-                           item_text, NULL AS intent_string,
+                           item_text, CAST(NULL AS STRING) AS intent_string,
                            ml_generate_embedding_result AS embedding,
                            '{_DIRECT_PROMPT_HASH}' AS prompt_hash,
                            CURRENT_TIMESTAMP() AS embedded_at
@@ -371,50 +371,61 @@ def run_gap_analysis_pipeline(
                     )
                 """, f"Step 3b (direct): cache target embeddings (dataset_id={did})")
 
-    # Step 4: VECTOR_SEARCH against all target embeddings and insert results
-    # (identical structure for both intent-normalized and direct modes)
-    run_bq(f"""
-        INSERT INTO {_t(T_GAP_ANALYSIS)}
-          (analysis_id, created_at, keyword_text, keyword_intent,
-           closest_portfolio_item, closest_portfolio_intent,
-           semantic_distance, avg_monthly_searches)
-        WITH vs AS (
-          SELECT
-            query.item_text AS keyword_text,
-            query.intent_string AS keyword_intent,
-            base.item_text AS target_item,
-            base.intent_string AS target_intent,
-            distance AS semantic_distance
-          FROM VECTOR_SEARCH(
-            (
-              SELECT *
-              FROM {_t(T_DATASET_EMBEDDINGS)}
-              WHERE dataset_id IN ({target_ids_sql}) AND prompt_hash = '{target_ph}'
-            ),
-            'embedding',
-            (SELECT item_text, intent_string, embedding FROM {_t(tmp_src_emb)}),
-            top_k => 3,
-            distance_type => 'COSINE',
-            options => '{{"use_brute_force": true}}'
-          )
-        )
-        SELECT
-          '{analysis_id}' AS analysis_id,
-          CURRENT_TIMESTAMP() AS created_at,
-          vs.keyword_text,
-          vs.keyword_intent,
-          vs.target_item AS closest_portfolio_item,
-          vs.target_intent AS closest_portfolio_intent,
-          vs.semantic_distance,
-          kw.avg_monthly_searches
-        FROM vs
-        LEFT JOIN (
-          SELECT item_text, MAX(avg_monthly_searches) AS avg_monthly_searches
-          FROM {_t(T_DATASET_ITEMS)}
-          WHERE dataset_id IN ({source_ids_sql})
-          GROUP BY item_text
-        ) kw ON vs.keyword_text = kw.item_text
-    """, "Step 4: insert gap analysis results (VECTOR_SEARCH)")
+    # Step 4: VECTOR_SEARCH in batches to avoid shuffle memory limits on large datasets.
+    # Brute-force cross-products on 1M+ items can exceed BQ's on-demand shuffle quota.
+    _VS_BATCH = 100_000
+    src_count = run_bq_scalar(f"SELECT COUNT(*) FROM {_t(tmp_src_emb)}")
+    num_vs_batches = max(1, (src_count + _VS_BATCH - 1) // _VS_BATCH)
+    print(f"📊 Vector search: {src_count} source items → {num_vs_batches} batch(es) of {_VS_BATCH}")
+
+    for vs_batch in range(num_vs_batches):
+        vs_offset = vs_batch * _VS_BATCH
+        run_bq(f"""
+            INSERT INTO {_t(T_GAP_ANALYSIS)}
+              (analysis_id, created_at, keyword_text, keyword_intent,
+               closest_portfolio_item, closest_portfolio_intent,
+               semantic_distance, avg_monthly_searches)
+            WITH vs AS (
+              SELECT
+                query.item_text AS keyword_text,
+                query.intent_string AS keyword_intent,
+                base.item_text AS target_item,
+                base.intent_string AS target_intent,
+                distance AS semantic_distance
+              FROM VECTOR_SEARCH(
+                (
+                  SELECT *
+                  FROM {_t(T_DATASET_EMBEDDINGS)}
+                  WHERE dataset_id IN ({target_ids_sql}) AND prompt_hash = '{target_ph}'
+                ),
+                'embedding',
+                (
+                  SELECT item_text, intent_string, embedding
+                  FROM {_t(tmp_src_emb)}
+                  LIMIT {_VS_BATCH} OFFSET {vs_offset}
+                ),
+                top_k => 3,
+                distance_type => 'COSINE',
+                options => '{{"use_brute_force": false}}'
+              )
+            )
+            SELECT
+              '{analysis_id}' AS analysis_id,
+              CURRENT_TIMESTAMP() AS created_at,
+              vs.keyword_text,
+              vs.keyword_intent,
+              vs.target_item AS closest_portfolio_item,
+              vs.target_intent AS closest_portfolio_intent,
+              vs.semantic_distance,
+              kw.avg_monthly_searches
+            FROM vs
+            LEFT JOIN (
+              SELECT item_text, MAX(avg_monthly_searches) AS avg_monthly_searches
+              FROM {_t(T_DATASET_ITEMS)}
+              WHERE dataset_id IN ({source_ids_sql})
+              GROUP BY item_text
+            ) kw ON vs.keyword_text = kw.item_text
+        """, f"Step 4 batch {vs_batch + 1}/{num_vs_batches}: vector search ({vs_offset}–{vs_offset + _VS_BATCH})")
 
     # Count distinct source items analyzed
     count = run_bq_scalar(f"""
