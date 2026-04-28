@@ -1,5 +1,6 @@
 """BigQuery ML helpers: model management and gap analysis pipeline."""
 import hashlib
+import time
 from db import (
     bq_client, db as firestore_db, PROJECT_ID, DATASET_ID, CONNECTION_ID,
     MODEL_GEMINI, MODEL_EMBEDDINGS,
@@ -71,6 +72,85 @@ def create_models_if_not_exist():
         )
     except Exception as e:
         print(f"⚠️ Model creation encountered an error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Vector index management
+# ---------------------------------------------------------------------------
+
+def get_vector_index_coverage() -> int:
+    """Return the vector index coverage % (0–100) for dataset_embeddings, or -1 if no index exists."""
+    if bq_client is None:
+        return -1
+    try:
+        rows = list(bq_client.query(f"""
+            SELECT CAST(COALESCE(MAX(coverage_percentage), -1) AS INT64)
+            FROM `{PROJECT_ID}.{DATASET_ID}.INFORMATION_SCHEMA.VECTOR_INDEXES`
+            WHERE table_name = '{T_DATASET_EMBEDDINGS}'
+              AND index_name = 'idx_dataset_embeddings_embedding'
+        """).result())
+        val = rows[0][0] if rows else -1
+        return int(val) if val is not None else -1
+    except Exception as e:
+        print(f"⚠️ Could not check vector index coverage: {e}")
+        return -1
+
+
+def create_vector_index_if_not_exist():
+    """Initiate creation of a persistent ANN vector index on dataset_embeddings.
+
+    BQ builds the index asynchronously in the background — this function returns
+    immediately. The index is required for VECTOR_SEARCH on large datasets
+    (>10M rows) to avoid BQ shuffle memory limits on on-demand pricing.
+
+    num_lists=2000 is appropriate for ~16M rows (sqrt(16M) ≈ 4000, we use half).
+    """
+    if bq_client is None:
+        print("⚠️ BQ client not available — skipping vector index creation")
+        return
+    try:
+        run_bq(
+            f"""CREATE VECTOR INDEX IF NOT EXISTS idx_dataset_embeddings_embedding
+                ON {_t(T_DATASET_EMBEDDINGS)}(embedding)
+                OPTIONS(distance_type='COSINE', index_type='IVF',
+                        ivf_options='{{"num_lists": 2000}}')""",
+            "CREATE VECTOR INDEX IF NOT EXISTS on dataset_embeddings(embedding)",
+        )
+        coverage = get_vector_index_coverage()
+        if coverage >= 0:
+            print(f"📊 Vector index coverage: {coverage}%")
+        else:
+            print("⏳ Vector index building in the background...")
+    except Exception as e:
+        print(f"⚠️ Vector index creation encountered an error: {e}")
+
+
+def _wait_for_vector_index(min_coverage: int = 99, timeout_seconds: int = 10800) -> int:
+    """Poll until the vector index reaches min_coverage% or timeout_seconds elapses.
+
+    Returns the final coverage % (may be < min_coverage if timed out).
+    Logs progress every 2 minutes.
+    """
+    poll_interval = 120  # seconds
+    waited = 0
+    while waited < timeout_seconds:
+        coverage = get_vector_index_coverage()
+        if coverage < 0:
+            # No index at all — try to create it and then wait
+            print("⚠️ No vector index found — creating now (VECTOR_SEARCH may fail on large datasets without it)")
+            create_vector_index_if_not_exist()
+            time.sleep(poll_interval)
+            waited += poll_interval
+            continue
+        if coverage >= min_coverage:
+            print(f"✅ Vector index ready (coverage={coverage}%)")
+            return coverage
+        print(f"⏳ Vector index building: {coverage}% coverage — waiting {poll_interval}s...")
+        time.sleep(poll_interval)
+        waited += poll_interval
+    coverage = get_vector_index_coverage()
+    print(f"⚠️ Vector index timeout after {timeout_seconds}s — current coverage={coverage}%. Proceeding anyway.")
+    return coverage
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +453,15 @@ def run_gap_analysis_pipeline(
 
     # Step 4: VECTOR_SEARCH in batches to avoid shuffle memory limits on large datasets.
     # Brute-force cross-products on 1M+ items can exceed BQ's on-demand shuffle quota.
+    # Requires a persistent VECTOR INDEX on dataset_embeddings(embedding) to avoid shuffle OOM.
     _VS_BATCH = 100_000
+
+    # Wait for the vector index to be ready before running VECTOR_SEARCH.
+    # Without it, BQ builds a temporary ANN index at query time which exceeds on-demand
+    # shuffle memory limits for tables with >10M rows.
+    print("⏳ Checking vector index readiness before VECTOR_SEARCH...")
+    _wait_for_vector_index(min_coverage=99, timeout_seconds=10800)
+
     src_count = run_bq_scalar(f"SELECT COUNT(*) FROM {_t(tmp_src_emb)}")
     num_vs_batches = max(1, (src_count + _VS_BATCH - 1) // _VS_BATCH)
     print(f"📊 Vector search: {src_count} source items → {num_vs_batches} batch(es) of {_VS_BATCH}")

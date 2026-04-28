@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from db import ga_auth_manager, bq_client, db, config
-from bq_ml import create_models_if_not_exist
+from bq_ml import create_models_if_not_exist, create_vector_index_if_not_exist
 from routers.settings import _ensure_defaults
 from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
 from routers.filter_executions import resume_stuck_filter_executions
@@ -19,6 +19,9 @@ from routers.datasets import resume_stuck_datasets
 async def lifespan(app: FastAPI):
     # Run all startup tasks in background threads so startup doesn't block or crash
     threading.Thread(target=create_models_if_not_exist, daemon=True).start()
+    # Ensure a persistent vector index exists on dataset_embeddings so VECTOR_SEARCH
+    # doesn't hit BQ on-demand shuffle memory limits for large tables (>10M rows).
+    threading.Thread(target=create_vector_index_if_not_exist, daemon=True).start()
     threading.Thread(target=_ensure_defaults, daemon=True).start()
     # Resume any filter executions that were interrupted by a previous deploy/crash
     threading.Thread(target=resume_stuck_filter_executions, daemon=True).start()
