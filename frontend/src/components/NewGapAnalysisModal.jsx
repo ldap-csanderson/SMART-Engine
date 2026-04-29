@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import API_BASE from '../config'
-import CostEstimateBox, { estimateFilterCost } from './CostEstimateBox'
+import CostEstimateBox from './CostEstimateBox'
 
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 
@@ -23,8 +23,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const [targetId, setTargetId] = useState('')
   const [minSearches, setMinSearches] = useState(1000)
   const [useIntentNormalization, setUseIntentNormalization] = useState(false)
-  const [filterIds, setFilterIds] = useState([])
-  const [filters, setFilters] = useState([])
 
   // step: 'form' | 'confirm'
   const [step, setStep] = useState('form')
@@ -37,12 +35,10 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
     Promise.all([
       fetch(`${API_BASE}/api/datasets`).then(r => r.json()),
       fetch(`${API_BASE}/api/dataset-groups`).then(r => r.json()),
-      fetch(`${API_BASE}/api/filters`).then(r => r.json()),
-    ]).then(([dsData, grpData, fData]) => {
+    ]).then(([dsData, grpData]) => {
       const completedDs = (dsData.datasets || []).filter(d => d.status === 'completed')
       setDatasets(completedDs)
       setGroups(grpData.groups || [])
-      setFilters(fData.filters || [])
     }).catch(console.error)
   }, [])
 
@@ -50,10 +46,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const showSearchVolume = sourceMode === 'group'
     ? !!sourceId
     : (sourceDataset && SEARCH_VOLUME_TYPES.has(sourceDataset.type))
-
-  const toggleFilter = (id) => {
-    setFilterIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
 
   const handleEstimate = async (e) => {
     e.preventDefault()
@@ -102,7 +94,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           target_is_group: targetMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
           use_intent_normalization: useIntentNormalization,
-          filter_ids: filterIds,
         }),
       })
       if (!res.ok) {
@@ -148,12 +139,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
       </button>
     </div>
   )
-
-  // For the confirm step
-  const selectedFilters = filters.filter(f => filterIds.includes(f.filter_id))
-  const filterCosts = estimate
-    ? selectedFilters.map(f => estimateFilterCost(f, estimate.unique_items))
-    : []
 
   const sourceLabel = sourceMode === 'dataset'
     ? (datasets.find(d => d.dataset_id === sourceId)?.name ?? sourceId)
@@ -306,35 +291,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
               </p>
             </div>
 
-            {/* Filters (optional) */}
-            {filters.length > 0 && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Run Filters After Analysis <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-36 overflow-y-auto">
-                  {filters.map(f => (
-                    <label key={f.filter_id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={filterIds.includes(f.filter_id)}
-                        onChange={() => toggleFilter(f.filter_id)}
-                        className="rounded text-indigo-600 focus:ring-indigo-500"
-                        disabled={estimating}
-                      />
-                      <span className="text-sm text-gray-800">{f.name}</span>
-                      <span className="text-xs text-gray-400 ml-auto font-mono">{f.label}</span>
-                    </label>
-                  ))}
-                </div>
-                {filterIds.length > 0 && (
-                  <p className="text-xs text-indigo-600 mt-1">
-                    {filterIds.length} filter{filterIds.length > 1 ? 's' : ''} will run automatically after the analysis completes.
-                  </p>
-                )}
-              </div>
-            )}
-
             {error && <p className="text-sm text-red-600">{error}</p>}
 
             <div className="flex justify-end gap-3 pt-2">
@@ -378,9 +334,6 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
               {showSearchVolume && (
                 <p><span className="font-medium">Min. monthly searches:</span> ≥ {Number(minSearches).toLocaleString()}</p>
               )}
-              {filterIds.length > 0 && (
-                <p><span className="font-medium">Filters:</span> {filterIds.length} will run after</p>
-              )}
             </div>
 
             {/* Cost estimate box */}
@@ -391,9 +344,11 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
                 embedding_cost: estimate.estimated_embedding_cost_usd,
                 subtotal: estimate.estimated_cost_usd,
               }}
-              selectedFilters={selectedFilters}
-              filterCosts={filterCosts}
             />
+
+            <p className="text-xs text-gray-400">
+              Filters can be run after the analysis completes from the analysis detail page.
+            </p>
 
             {error && <p className="text-sm text-red-600">{error}</p>}
 

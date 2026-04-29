@@ -20,6 +20,7 @@ router = APIRouter(prefix="/gap-analyses", tags=["filter-executions"])
 
 class FilterExecutionCreate(BaseModel):
     filter_ids: List[str]
+    filter_min_distance: float = 0.2
 
 
 class FilterExecution(BaseModel):
@@ -30,6 +31,7 @@ class FilterExecution(BaseModel):
     status: str
     created_at: str
     total_evaluated: int
+    filter_min_distance: Optional[float] = None
     error_message: Optional[str] = None
 
 
@@ -51,14 +53,15 @@ def _doc_to_fe(d: dict) -> FilterExecution:
         status=d["status"],
         created_at=ts_to_str(d["created_at"]),
         total_evaluated=d.get("total_evaluated", 0),
+        filter_min_distance=d.get("filter_min_distance"),
         error_message=d.get("error_message"),
     )
 
 
-def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot: dict):
+def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot: dict, min_distance: float = 0.0):
     """Background task: run a single filter pipeline and update Firestore."""
     label = filter_snapshot.get("label", execution_id)
-    print(f"🔄 Filter execution {execution_id} started (label={label})")
+    print(f"🔄 Filter execution {execution_id} started (label={label}, min_distance={min_distance})")
 
     def on_batch_complete(rows_done: int):
         """Update Firestore with incremental progress after each batch."""
@@ -75,6 +78,7 @@ def _run_filter_background(execution_id: str, analysis_id: str, filter_snapshot:
             analysis_id=analysis_id,
             filter_snapshot=filter_snapshot,
             on_batch_complete=on_batch_complete,
+            min_distance=min_distance,
         )
         db.collection("filter_executions").document(execution_id).update({
             "status": "completed",
@@ -114,11 +118,12 @@ def resume_stuck_filter_executions():
             execution_id = d["execution_id"]
             analysis_id = d["analysis_id"]
             filter_snapshot = d.get("filter_snapshot", {})
+            min_distance = d.get("filter_min_distance", 0.0)
             label = filter_snapshot.get("label", execution_id)
             print(f"🔁 Resuming stuck filter execution {execution_id} (label={label})")
             threading.Thread(
                 target=_run_filter_background,
-                args=(execution_id, analysis_id, filter_snapshot),
+                args=(execution_id, analysis_id, filter_snapshot, min_distance),
                 daemon=True,
             ).start()
             resumed += 1
@@ -152,6 +157,8 @@ def create_filter_executions(
         raise HTTPException(503, "BigQuery not initialized")
     if not payload.filter_ids:
         raise HTTPException(400, "filter_ids must not be empty")
+
+    min_distance = max(0.0, payload.filter_min_distance)
 
     # Verify analysis exists
     analysis_doc = db.collection("gap_analyses").document(analysis_id).get()
@@ -221,10 +228,11 @@ def create_filter_executions(
             "status": "processing",
             "created_at": now,
             "total_evaluated": 0,
+            "filter_min_distance": min_distance,
             "error_message": None,
         })
         background_tasks.add_task(
-            _run_filter_background, execution_id, analysis_id, fs["snapshot"]
+            _run_filter_background, execution_id, analysis_id, fs["snapshot"], min_distance
         )
         # Build the response directly from known data — avoids SERVER_TIMESTAMP
         # not being resolved yet on an immediate re-read.
@@ -236,6 +244,7 @@ def create_filter_executions(
             status="processing",
             created_at=now.isoformat(),
             total_evaluated=0,
+            filter_min_distance=min_distance,
             error_message=None,
         ))
 

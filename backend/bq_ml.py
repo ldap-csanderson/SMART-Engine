@@ -542,6 +542,7 @@ def run_filter_pipeline(
     analysis_id: str,
     filter_snapshot: dict,
     on_batch_complete=None,
+    min_distance: float = 0.0,
 ) -> int:
     """
     Run LLM-based boolean filter over all keywords in a gap analysis.
@@ -551,6 +552,8 @@ def run_filter_pipeline(
 
     filter_snapshot must have: label (str), text (str)
     on_batch_complete: optional callable(rows_done: int) for progress updates
+    min_distance: only evaluate keywords whose MIN(semantic_distance) >= this value.
+                  Skips items that are already close to the target (well-covered).
 
     Returns the number of rows inserted into filter_results.
     """
@@ -578,12 +581,19 @@ def run_filter_pipeline(
             f"            )"
         )
 
+    distance_filter = f"AND MIN(semantic_distance) >= {min_distance}" if min_distance > 0.0 else ""
     total_keywords = run_bq_scalar(f"""
-        SELECT COUNT(DISTINCT keyword_text)
-        FROM {_t(T_GAP_ANALYSIS)}
-        WHERE analysis_id = '{analysis_id}'
+        SELECT COUNT(*)
+        FROM (
+          SELECT keyword_text
+          FROM {_t(T_GAP_ANALYSIS)}
+          WHERE analysis_id = '{analysis_id}'
+          GROUP BY keyword_text
+          HAVING 1=1 {distance_filter}
+        )
     """)
-    print(f"🔢 Filter '{label}': {total_keywords} keywords to process in batches of {FILTER_BATCH_SIZE}")
+    print(f"🔢 Filter '{label}': {total_keywords} keywords to process in batches of {FILTER_BATCH_SIZE}"
+          + (f" (min_distance={min_distance})" if min_distance > 0.0 else ""))
 
     if total_keywords == 0:
         print(f"⚠️ No keywords found for analysis {analysis_id} — nothing to filter")
@@ -605,9 +615,11 @@ def run_filter_pipeline(
                 keyword_text,
                 ROW_NUMBER() OVER (ORDER BY keyword_text) AS rn
               FROM (
-                SELECT DISTINCT keyword_text
+                SELECT keyword_text
                 FROM {_t(T_GAP_ANALYSIS)}
                 WHERE analysis_id = '{analysis_id}'
+                GROUP BY keyword_text
+                HAVING 1=1 {distance_filter}
               )
             ),
             batch AS (
