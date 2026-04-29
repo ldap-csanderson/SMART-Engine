@@ -24,6 +24,10 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const [minSearches, setMinSearches] = useState(1000)
   const [useIntentNormalization, setUseIntentNormalization] = useState(false)
 
+  // Advanced
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [topK, setTopK] = useState(10)
+
   // step: 'form' | 'confirm'
   const [step, setStep] = useState('form')
   const [estimate, setEstimate] = useState(null)
@@ -94,6 +98,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           target_is_group: targetMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
           use_intent_normalization: useIntentNormalization,
+          top_k: topK,
         }),
       })
       if (!res.ok) {
@@ -291,6 +296,47 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
               </p>
             </div>
 
+            {/* Advanced section */}
+            <div className="border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(v => !v)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 mt-2 mb-1"
+                disabled={estimating}
+              >
+                <svg
+                  className={`w-3 h-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                Advanced
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-2 space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Neighbor Count (top_k)
+                    </label>
+                    <input
+                      type="number"
+                      value={topK}
+                      onChange={e => setTopK(Math.max(1, Math.min(50, Number(e.target.value))))}
+                      min={1}
+                      max={50}
+                      step={1}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      disabled={estimating}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      How many target neighbors to store per source item. Higher values show richer context in results. Default: 10. Minimal extra cost.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {error && <p className="text-sm text-red-600">{error}</p>}
 
             <div className="flex justify-end gap-3 pt-2">
@@ -334,6 +380,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
               {showSearchVolume && (
                 <p><span className="font-medium">Min. monthly searches:</span> ≥ {Number(minSearches).toLocaleString()}</p>
               )}
+              <p><span className="font-medium">Neighbors per keyword:</span> {topK}</p>
             </div>
 
             {/* Cost estimate box */}

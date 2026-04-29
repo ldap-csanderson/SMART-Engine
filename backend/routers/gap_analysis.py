@@ -25,6 +25,7 @@ class GapAnalysisCreate(BaseModel):
     target_is_group: bool = False
     min_monthly_searches: int = 1000
     use_intent_normalization: bool = False
+    top_k: int = 10
 
 
 class GapAnalysisEstimateRequest(BaseModel):
@@ -110,9 +111,10 @@ def _run_analysis_background(
     target_dataset_type: str,
     min_monthly_searches: int = 1000,
     use_intent_normalization: bool = False,
+    top_k: int = 10,
 ):
     """Background task: run the full gap analysis pipeline."""
-    print(f"🔄 Gap analysis {analysis_id} started (intent_normalization={use_intent_normalization})")
+    print(f"🔄 Gap analysis {analysis_id} started (intent_normalization={use_intent_normalization}, top_k={top_k})")
     try:
         # Pre-count source items
         if bq_client:
@@ -147,6 +149,7 @@ def _run_analysis_background(
             source_dataset_type=source_dataset_type,
             min_monthly_searches=min_monthly_searches,
             use_intent_normalization=use_intent_normalization,
+            top_k=top_k,
         )
         db.collection("gap_analyses").document(analysis_id).update({
             "status": "completed",
@@ -266,6 +269,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         "target_is_group": payload.target_is_group,
         "min_monthly_searches": payload.min_monthly_searches,
         "use_intent_normalization": payload.use_intent_normalization,
+        "top_k": payload.top_k,
         "status": "processing",
         "created_at": firestore.SERVER_TIMESTAMP,
         "total_items_analyzed": 0,
@@ -281,6 +285,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         target_dataset_type,
         payload.min_monthly_searches,
         payload.use_intent_normalization,
+        payload.top_k,
     )
 
     doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
@@ -518,7 +523,7 @@ def get_gap_analysis_results(
                   g.semantic_distance AS distance
                 )
                 ORDER BY g.semantic_distance ASC
-                LIMIT 3
+                LIMIT 20
               ) AS portfolio_matches,
               MIN(g.semantic_distance) AS semantic_distance,
               MAX(g.avg_monthly_searches) AS avg_monthly_searches

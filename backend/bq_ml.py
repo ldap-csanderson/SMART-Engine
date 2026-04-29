@@ -260,6 +260,7 @@ def run_gap_analysis_pipeline(
     source_dataset_type: str,
     min_monthly_searches: int = 1000,
     use_intent_normalization: bool = True,
+    top_k: int = 10,
 ) -> int:
     """
     Run the full gap analysis pipeline using v3 dataset_items / dataset_embeddings tables.
@@ -492,7 +493,7 @@ def run_gap_analysis_pipeline(
                   FROM {_t(tmp_src_emb)}
                   LIMIT {_VS_BATCH} OFFSET {vs_offset}
                 ),
-                top_k => 3,
+                top_k => {top_k},
                 distance_type => 'COSINE',
                 options => '{{"use_brute_force": false}}'
               )
