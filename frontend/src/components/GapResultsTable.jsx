@@ -117,7 +117,7 @@ export default function GapResultsTable({
                       <td className="px-4 py-2.5 font-medium text-gray-900">
                         {row.keyword_text}
                         {showIntentColumns && row.keyword_intent && (
-                          <p className="text-xs text-gray-400 font-normal mt-0.5 truncate max-w-xs" title={row.keyword_intent}>
+                          <p className="text-xs text-gray-400 font-normal mt-0.5">
                             {row.keyword_intent}
                           </p>
                         )}
@@ -134,10 +134,10 @@ export default function GapResultsTable({
                           {row.semantic_distance?.toFixed(3) ?? '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-gray-500 max-w-xs" title={closestMatch?.item}>
-                        <span className="truncate block">{closestMatch?.item || '—'}</span>
+                      <td className="px-4 py-2.5 text-gray-500">
+                        <span>{closestMatch?.item || '—'}</span>
                         {showIntentColumns && closestMatch?.intent && (
-                          <p className="text-xs text-gray-400 mt-0.5 truncate" title={closestMatch.intent}>
+                          <p className="text-xs text-gray-400 mt-0.5">
                             {closestMatch.intent}
                           </p>
                         )}
