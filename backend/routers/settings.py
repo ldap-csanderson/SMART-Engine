@@ -1,11 +1,11 @@
 """Settings endpoints — per-dataset-type prompt configuration stored in Firestore."""
 import yaml
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from google.cloud import firestore
 from pydantic import BaseModel
 
-from db import db, ts_to_str, ga_auth_manager, get_customer_id, save_customer_id, CUSTOMER_ID
+from db import db, ts_to_str, ga_auth_manager, get_customer_id, save_customer_id, CUSTOMER_ID, config
 from bq_ml import get_default_prompt_for_type
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -238,3 +238,59 @@ def _update_secret_login_customer_id(new_cid: str) -> dict:
     print(f"✅ Updated login_customer_id in Secret Manager to: {new_cid}")
 
     return current_config
+
+
+# ---------------------------------------------------------------------------
+# Chat agent model settings
+# ---------------------------------------------------------------------------
+
+_DEFAULT_AGENT_MODEL = "gemini-2.5-flash"
+_AVAILABLE_MODELS: List[str] = config.get("gemini_models", [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-3-deep-think",
+])
+
+
+class AgentSettings(BaseModel):
+    model: str
+    available_models: List[str]
+
+
+class AgentSettingsUpdate(BaseModel):
+    model: str
+
+
+@router.get("/agent", response_model=AgentSettings)
+def get_agent_settings():
+    """Return the current chat agent model and available model list."""
+    model = _DEFAULT_AGENT_MODEL
+    if db:
+        try:
+            doc = db.collection("settings").document("agent").get()
+            if doc.exists:
+                model = doc.to_dict().get("model", _DEFAULT_AGENT_MODEL)
+        except Exception:
+            pass
+    return AgentSettings(model=model, available_models=_AVAILABLE_MODELS)
+
+
+@router.put("/agent", response_model=AgentSettings)
+def update_agent_settings(payload: AgentSettingsUpdate):
+    """Save the chat agent model choice to Firestore."""
+    if payload.model not in _AVAILABLE_MODELS:
+        raise HTTPException(400, f"Unknown model '{payload.model}'. Must be one of: {', '.join(_AVAILABLE_MODELS)}")
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    try:
+        db.collection("settings").document("agent").set(
+            {"model": payload.model},
+            merge=True,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to save agent settings: {exc}")
+    return AgentSettings(model=payload.model, available_models=_AVAILABLE_MODELS)

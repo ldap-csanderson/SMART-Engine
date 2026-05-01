@@ -7,8 +7,20 @@ const TYPES = [
   { value: 'google_ads_ad_copy', label: 'Ad Copy', needsAds: true },
   { value: 'google_ads_keywords', label: 'Keyword Planner (URL-seeded)', needsAds: true },
   { value: 'google_ads_keyword_planner', label: 'Keyword Planner (Account-level)', needsAds: true },
+  { value: 'google_ads_landing_pages', label: 'Landing Pages (URLs)', needsAds: true },
   { value: 'text_list', label: 'Text List (manual)', needsAds: false },
 ]
+
+const LP_URL_SOURCES = [
+  { value: 'ad_final_urls', label: 'Ad Final URLs' },
+  { value: 'ad_mobile_final_urls', label: 'Ad Mobile Final URLs' },
+  { value: 'sitelink_urls', label: 'Sitelink Extension URLs' },
+  { value: 'keyword_final_urls', label: 'Keyword Final URL Overrides' },
+  { value: 'page_feed_urls', label: 'Page Feed URLs' },
+  { value: 'landing_page_view_urls', label: 'Landing Page Views (traffic-based)' },
+]
+
+const DEFAULT_LP_SOURCES = ['ad_final_urls', 'sitelink_urls', 'keyword_final_urls', 'page_feed_urls', 'landing_page_view_urls']
 
 export default function NewDatasetModal({ onClose, onCreated }) {
   const [name, setName] = useState('')
@@ -18,88 +30,93 @@ export default function NewDatasetModal({ onClose, onCreated }) {
   const [accounts, setAccounts] = useState([])
   const [selectedAccounts, setSelectedAccounts] = useState([])
   const [accountsLoading, setAccountsLoading] = useState(false)
-  const [dateRangeDays, setDateRangeDays] = useState(90)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [lpSources, setLpSources] = useState(DEFAULT_LP_SOURCES)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState(null)
 
   const selectedType = TYPES.find(t => t.value === type)
-  const needsAccountPicker = selectedType?.needsAds && type !== 'google_ads_keywords'
-  const needsUrls = type === 'google_ads_keywords'
-  const needsTextList = type === 'text_list'
-  const needsDateRange = type === 'google_ads_search_terms'
+  const needsAds = selectedType?.needsAds ?? false
+  const isLpType = type === 'google_ads_landing_pages'
+  const isKeywordsUrl = type === 'google_ads_keywords'
+  const isTextList = type === 'text_list'
 
   useEffect(() => {
-    if (needsAccountPicker) {
-      setAccountsLoading(true)
-      fetch(`${API_BASE}/api/datasets/accounts`)
-        .then(r => r.json())
-        .then(data => {
-          setAccounts(data.accounts || [])
-          // Default: select all
-          setSelectedAccounts((data.accounts || []).map(a => a.account_id))
-        })
-        .catch(() => setAccounts([]))
-        .finally(() => setAccountsLoading(false))
-    }
-  }, [needsAccountPicker])
+    if (!needsAds) return
+    setAccountsLoading(true)
+    fetch(`${API_BASE}/api/datasets/accounts`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.accounts) setAccounts(data.accounts)
+      })
+      .catch(() => {})
+      .finally(() => setAccountsLoading(false))
+  }, [needsAds])
 
   const toggleAccount = (id) => {
     setSelectedAccounts(prev =>
-      prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     )
   }
 
-  const selectAll = () => setSelectedAccounts(accounts.map(a => a.account_id))
-  const selectNone = () => setSelectedAccounts([])
+  const toggleLpSource = (value) => {
+    setLpSources(prev =>
+      prev.includes(value) ? prev.filter(x => x !== value) : [...prev, value]
+    )
+  }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError('')
+  const handleCreate = async () => {
     if (!name.trim()) { setError('Name is required'); return }
+    if (isTextList && !textItems.trim()) { setError('Please enter at least one item'); return }
+    if (isKeywordsUrl && !urls.trim()) { setError('Please enter at least one URL'); return }
+    if (isLpType && lpSources.length === 0) { setError('Select at least one URL source'); return }
 
-    let source_config = {}
-    let items = undefined
+    setCreating(true)
+    setError(null)
 
-    if (needsUrls) {
-      const urlList = urls.split('\n').map(u => u.trim()).filter(Boolean)
-      if (!urlList.length) { setError('At least one URL is required'); return }
-      source_config = { urls: urlList }
-    } else if (needsAccountPicker) {
-      source_config = { account_ids: selectedAccounts }
-      if (needsDateRange) source_config.date_range_days = dateRangeDays
-    } else if (needsTextList) {
-      items = textItems.split('\n').map(i => i.trim()).filter(Boolean)
-      if (!items.length) { setError('At least one item is required'); return }
+    const body = { name: name.trim(), type }
+
+    if (isTextList) {
+      body.items = textItems.split('\n').map(s => s.trim()).filter(Boolean)
+    } else if (isKeywordsUrl) {
+      body.source_config = {
+        urls: urls.split('\n').map(s => s.trim()).filter(Boolean),
+        account_ids: selectedAccounts,
+      }
+    } else if (isLpType) {
+      body.source_config = {
+        sources: lpSources,
+        account_ids: selectedAccounts,
+      }
+    } else if (needsAds) {
+      body.source_config = { account_ids: selectedAccounts }
     }
 
-    setSubmitting(true)
     try {
       const res = await fetch(`${API_BASE}/api/datasets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), type, source_config, items }),
+        body: JSON.stringify(body),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        setError(err.detail || 'Failed to create dataset')
-        return
-      }
-      onCreated()
-    } catch (e) {
-      setError('Network error')
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Failed to create dataset'); return }
+      onCreated(data)
+      onClose()
+    } catch {
+      setError('Network error. Please try again.')
     } finally {
-      setSubmitting(false)
+      setCreating(false)
     }
   }
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-5 border-b border-gray-100">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900">New Dataset</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-5">
           {/* Name */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
@@ -107,123 +124,128 @@ export default function NewDatasetModal({ onClose, onCreated }) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="e.g. Q1 Search Terms"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="e.g. JustAnswer Account Keywords"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              autoFocus
             />
           </div>
 
           {/* Type */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-            <select
-              value={type}
-              onChange={e => setType(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
+            <div className="grid grid-cols-2 gap-2">
               {TYPES.map(t => (
-                <option key={t.value} value={t.value}>{t.label}</option>
+                <button
+                  key={t.value}
+                  onClick={() => setType(t.value)}
+                  className={`px-3 py-2 text-xs rounded-lg border text-left transition-colors ${
+                    type === t.value
+                      ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-medium'
+                      : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
               ))}
-            </select>
+            </div>
           </div>
 
-          {/* URL input */}
-          {needsUrls && (
+          {/* URL input for keyword planner (URL-seeded) */}
+          {isKeywordsUrl && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">URLs (one per line)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Seed URLs <span className="text-gray-400 font-normal">(one per line)</span></label>
               <textarea
                 value={urls}
                 onChange={e => setUrls(e.target.value)}
                 rows={4}
-                placeholder="https://example.com/page1&#10;https://example.com/page2"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="https://example.com/product&#10;https://example.com/service"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
               />
             </div>
           )}
 
-          {/* Account picker */}
-          {needsAccountPicker && (
+          {/* LP sources checkboxes */}
+          {isLpType && (
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium text-gray-700">Accounts</label>
-                <div className="flex gap-2 text-xs text-indigo-600">
-                  <button type="button" onClick={selectAll} className="hover:underline">Select all</button>
-                  <span className="text-gray-300">|</span>
-                  <button type="button" onClick={selectNone} className="hover:underline">None</button>
-                </div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">URL Sources</label>
+              <div className="space-y-2">
+                {LP_URL_SOURCES.map(src => (
+                  <label key={src.value} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={lpSources.includes(src.value)}
+                      onChange={() => toggleLpSource(src.value)}
+                      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-300"
+                    />
+                    <span className="text-sm text-gray-700">{src.label}</span>
+                  </label>
+                ))}
               </div>
-              {accountsLoading ? (
-                <p className="text-sm text-gray-400">Loading accounts…</p>
-              ) : accounts.length === 0 ? (
-                <p className="text-sm text-gray-400">No accounts found</p>
-              ) : (
-                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-48 overflow-y-auto">
-                  {accounts.map(acct => (
-                    <label key={acct.account_id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedAccounts.includes(acct.account_id)}
-                        onChange={() => toggleAccount(acct.account_id)}
-                        className="rounded"
-                      />
-                      <span className="text-sm text-gray-800">{acct.name}</span>
-                      <span className="text-xs text-gray-400 ml-auto">{acct.account_id}</span>
-                    </label>
-                  ))}
-                </div>
+              {lpSources.length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">Select at least one source.</p>
               )}
             </div>
           )}
 
-          {/* Date range for search terms */}
-          {needsDateRange && (
+          {/* Text items */}
+          {isTextList && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
-              <select
-                value={dateRangeDays}
-                onChange={e => setDateRangeDays(Number(e.target.value))}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value={30}>Last 30 days</option>
-                <option value={60}>Last 60 days</option>
-                <option value={90}>Last 90 days</option>
-                <option value={180}>Last 180 days</option>
-              </select>
-            </div>
-          )}
-
-          {/* Text list */}
-          {needsTextList && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Items (one per line)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Items <span className="text-gray-400 font-normal">(one per line)</span></label>
               <textarea
                 value={textItems}
                 onChange={e => setTextItems(e.target.value)}
                 rows={6}
-                placeholder="car insurance&#10;auto coverage&#10;vehicle protection"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="keyword one&#10;keyword two&#10;keyword three"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
               />
             </div>
           )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {/* Account selection for Google Ads types */}
+          {needsAds && accounts.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Accounts <span className="text-gray-400 font-normal">(leave empty to use all)</span>
+              </label>
+              <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                {accountsLoading ? (
+                  <p className="px-3 py-2 text-xs text-gray-400">Loading accounts…</p>
+                ) : (
+                  accounts.map(acct => (
+                    <label key={acct.account_id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedAccounts.includes(acct.account_id)}
+                        onChange={() => toggleAccount(acct.account_id)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-300"
+                      />
+                      <span className="text-sm text-gray-700">{acct.name}</span>
+                      <span className="text-xs text-gray-400 ml-auto">{acct.account_id}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+          {needsAds && !accountsLoading && accounts.length === 0 && (
+            <p className="text-xs text-amber-600">Could not load accounts — Google Ads may not be connected. The dataset will use the default account.</p>
+          )}
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || accountsLoading}
-              className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {submitting ? 'Creating…' : accountsLoading ? 'Loading accounts…' : 'Create Dataset'}
-            </button>
-          </div>
-        </form>
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg">Cancel</button>
+          <button
+            onClick={handleCreate}
+            disabled={creating}
+            className="px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50 transition-colors"
+          >
+            {creating ? 'Creating…' : 'Create Dataset'}
+          </button>
+        </div>
       </div>
     </div>
   )

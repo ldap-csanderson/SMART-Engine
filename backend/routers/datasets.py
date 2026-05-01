@@ -28,6 +28,7 @@ VALID_TYPES = {
     "google_ads_search_terms",
     "google_ads_keyword_planner",
     "google_ads_account_keywords",
+    "google_ads_landing_pages",
     "text_list",
 }
 
@@ -37,7 +38,25 @@ GOOGLE_ADS_TYPES = {
     "google_ads_search_terms",
     "google_ads_keyword_planner",
     "google_ads_account_keywords",
+    "google_ads_landing_pages",
 }
+
+# Landing page URL source options
+URL_SOURCES = {
+    "ad_final_urls": "Ad Final URLs",
+    "ad_mobile_final_urls": "Ad Mobile Final URLs",
+    "sitelink_urls": "Sitelink Extension URLs",
+    "keyword_final_urls": "Keyword Final URL Overrides",
+    "page_feed_urls": "Page Feed URLs",
+    "landing_page_view_urls": "Landing Page Views (traffic-based)",
+}
+DEFAULT_LP_SOURCES = [
+    "ad_final_urls",
+    "sitelink_urls",
+    "keyword_final_urls",
+    "page_feed_urls",
+    "landing_page_view_urls",
+]
 
 # Rows buffered before a BQ flush. Keeps peak memory at ~1-2 MB regardless of
 # total dataset size — each _ingest_* function only holds one batch at a time.
@@ -594,6 +613,134 @@ def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
         _mark_failed(dataset_id, str(e))
 
 
+def _ingest_google_ads_landing_pages(dataset_id: str, source_config: Dict):
+    """Background: fetch landing page URLs from selected Google Ads sources."""
+    client = get_ga_client()
+    customer_id = source_config.get("customer_id") or get_customer_id()
+    account_ids = source_config.get("account_ids", [])
+    sources = source_config.get("sources", DEFAULT_LP_SOURCES)
+    total = 0
+
+    try:
+        if client is None:
+            raise RuntimeError("Google Ads client not connected — re-authorize via Settings")
+
+        if not account_ids:
+            discovered = _get_accessible_accounts(client, customer_id)
+            account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
+            if not account_ids:
+                account_ids = [customer_id]
+
+        ga_service = client.get_service("GoogleAdsService")
+        batch: List[Dict] = []
+
+        def flush_if_full():
+            nonlocal total, batch
+            if len(batch) >= _INGEST_BATCH:
+                _insert_items_to_bq(dataset_id, batch)
+                total += len(batch)
+                batch = []
+
+        for i, acct_id in enumerate(account_ids, 1):
+            print(f"[{i}/{len(account_ids)}] Fetching landing pages from account {acct_id}…")
+
+            if "ad_final_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT ad_group_ad.ad.final_urls FROM ad_group_ad
+                        WHERE ad_group_ad.status != 'REMOVED' AND campaign.status != 'REMOVED' AND ad_group.status != 'REMOVED'
+                    """):
+                        for url in row.ad_group_ad.ad.final_urls:
+                            url = url.strip()
+                            if url:
+                                batch.append({"item_text": url, "source_url": "ad_final_url"})
+                                flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Ad final URLs from {acct_id}: {e}")
+
+            if "ad_mobile_final_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT ad_group_ad.ad.final_mobile_urls FROM ad_group_ad
+                        WHERE ad_group_ad.status != 'REMOVED' AND campaign.status != 'REMOVED' AND ad_group.status != 'REMOVED'
+                    """):
+                        for url in row.ad_group_ad.ad.final_mobile_urls:
+                            url = url.strip()
+                            if url:
+                                batch.append({"item_text": url, "source_url": "ad_mobile_final_url"})
+                                flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Ad mobile final URLs from {acct_id}: {e}")
+
+            if "sitelink_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT asset.sitelink_asset.final_urls FROM asset WHERE asset.type = 'SITELINK'
+                    """):
+                        for url in row.asset.sitelink_asset.final_urls:
+                            url = url.strip()
+                            if url:
+                                batch.append({"item_text": url, "source_url": "sitelink"})
+                                flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Sitelink URLs from {acct_id}: {e}")
+
+            if "keyword_final_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT ad_group_criterion.final_urls FROM ad_group_criterion
+                        WHERE ad_group_criterion.type = 'KEYWORD' AND ad_group_criterion.status != 'REMOVED'
+                          AND campaign.status != 'REMOVED' AND ad_group.status != 'REMOVED'
+                    """):
+                        for url in row.ad_group_criterion.final_urls:
+                            url = url.strip()
+                            if url:
+                                batch.append({"item_text": url, "source_url": "keyword_override"})
+                                flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Keyword final URL overrides from {acct_id}: {e}")
+
+            if "page_feed_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT asset.page_feed_asset.page_url FROM asset WHERE asset.type = 'PAGE_FEED'
+                    """):
+                        url = row.asset.page_feed_asset.page_url.strip()
+                        if url:
+                            batch.append({"item_text": url, "source_url": "page_feed"})
+                            flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Page feed URLs from {acct_id}: {e}")
+
+            if "landing_page_view_urls" in sources:
+                try:
+                    for row in ga_service.search(customer_id=acct_id, query="""
+                        SELECT landing_page_view.unexpanded_final_url FROM landing_page_view
+                        WHERE metrics.impressions > 0
+                    """):
+                        url = row.landing_page_view.unexpanded_final_url.strip()
+                        if url:
+                            batch.append({"item_text": url, "source_url": "landing_page_view"})
+                            flush_if_full()
+                except Exception as e:
+                    print(f"⚠️ Landing page views from {acct_id}: {e}")
+
+        if batch:
+            _insert_items_to_bq(dataset_id, batch)
+            total += len(batch)
+
+        count = _count_distinct_items(dataset_id)
+        db.collection("datasets").document(dataset_id).update({
+            "status": "completed",
+            "item_count": count,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        print(f"✅ Dataset {dataset_id} (google_ads_landing_pages) completed — {count} distinct URLs ({total} raw)")
+    except Exception as e:
+        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
+        _mark_failed(dataset_id, str(e))
+
+
 def _ingest_text_list(dataset_id: str, items: List[str]):
     """Background: insert text_list items into BQ in batches."""
     total = 0
@@ -775,6 +922,8 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         background_tasks.add_task(_ingest_google_ads_keyword_planner, dataset_id, source_config)
     elif payload.type == "google_ads_account_keywords":
         background_tasks.add_task(_ingest_google_ads_account_keywords, dataset_id, source_config)
+    elif payload.type == "google_ads_landing_pages":
+        background_tasks.add_task(_ingest_google_ads_landing_pages, dataset_id, source_config)
     elif payload.type == "text_list":
         background_tasks.add_task(_ingest_text_list, dataset_id, items_to_ingest)
 

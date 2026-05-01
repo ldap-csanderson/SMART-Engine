@@ -11,6 +11,7 @@ from db import ga_auth_manager, bq_client, db, config
 from bq_ml import create_models_if_not_exist, create_vector_index_if_not_exist
 from routers.settings import _ensure_defaults
 from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
+from routers.chat import dataset_chat_router, gap_chat_router
 from routers.filter_executions import resume_stuck_filter_executions
 from routers.datasets import resume_stuck_datasets
 
@@ -40,6 +41,8 @@ app.include_router(gap_analysis.router, prefix="/api")
 app.include_router(filter_executions.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(dataset_chat_router, prefix="/api")
+app.include_router(gap_chat_router, prefix="/api")
 
 
 @app.get("/api/health")

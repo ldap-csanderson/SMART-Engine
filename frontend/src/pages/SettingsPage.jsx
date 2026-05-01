@@ -62,6 +62,12 @@ export default function SettingsPage() {
   const [cidSaving, setCidSaving] = useState(false)
   const [cidMessage, setCidMessage] = useState(null)
 
+  // --- agent model ---
+  const [agentModel, setAgentModel] = useState('gemini-2.5-flash')
+  const [availableModels, setAvailableModels] = useState([])
+  const [agentModelSaving, setAgentModelSaving] = useState(false)
+  const [agentModelMessage, setAgentModelMessage] = useState(null)
+
   // --- prompts ---
   const [defaults, setDefaults] = useState(null)
   const [saved, setSaved] = useState(null)
@@ -172,6 +178,46 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => { fetchSettings() }, [fetchSettings])
+
+  // --------------------------------------------------------------------------
+  // Agent model
+  // --------------------------------------------------------------------------
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/settings/agent`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setAgentModel(d.model || 'gemini-2.5-flash')
+          setAvailableModels(d.available_models || [])
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleSaveAgentModel = async (model) => {
+    setAgentModel(model)
+    setAgentModelMessage(null)
+    setAgentModelSaving(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/settings/agent`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      let data = null
+      try { data = await res.json() } catch { /* */ }
+      if (!res.ok) {
+        setAgentModelMessage({ type: 'error', text: data?.detail || 'Failed to save model.' })
+      } else {
+        setAgentModelMessage({ type: 'success', text: `Model set to ${model}.` })
+      }
+    } catch {
+      setAgentModelMessage({ type: 'error', text: 'Network error.' })
+    } finally {
+      setAgentModelSaving(false)
+    }
+  }
 
   const handleSaveCid = async () => {
     const trimmed = cidValue.trim()
@@ -391,6 +437,53 @@ export default function SettingsPage() {
           {!healthLoading && !connected && (
             <p className="mt-3 text-xs text-gray-400">
               Google Ads datasets (search terms, ad copy, keyword planner) will not work until authorized.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Chat Agent Model ───────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900">Chat Agent Model</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Select the Gemini model used by the Analysis Assistant chat panels on dataset and gap analysis pages.
+          </p>
+        </div>
+        <div className="px-6 py-5">
+          {agentModelMessage && (
+            <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
+              agentModelMessage.type === 'success'
+                ? 'bg-green-50 text-green-700 border border-green-200'
+                : 'bg-red-50 text-red-700 border border-red-200'
+            }`}>
+              {agentModelMessage.text}
+            </div>
+          )}
+          {availableModels.length > 0 ? (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {availableModels.map(model => (
+                <button
+                  key={model}
+                  onClick={() => handleSaveAgentModel(model)}
+                  disabled={agentModelSaving}
+                  className={`px-3 py-2 text-xs rounded-lg border text-left font-mono transition-colors disabled:opacity-50 ${
+                    agentModel === model
+                      ? 'bg-purple-50 border-purple-400 text-purple-700 font-semibold'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {agentModel === model && <span className="mr-1">✓</span>}
+                  {model}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="h-9 bg-gray-100 rounded-lg animate-pulse w-48" />
+          )}
+          {agentModel && (
+            <p className="mt-2 text-xs text-gray-400">
+              Active: <span className="font-mono text-gray-600">{agentModel}</span>
             </p>
           )}
         </div>

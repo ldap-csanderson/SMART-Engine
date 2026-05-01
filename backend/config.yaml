@@ -41,6 +41,20 @@ oauth:
 secrets:
   google_ads_secret_name: "google-ads-yaml"
 
+# Gemini model for chat agents (overrideable via Settings UI → stored in Firestore)
+gemini:
+  model: "gemini-2.5-flash"
+
+# Available models shown in the model picker
+gemini_models:
+  - "gemini-2.5-flash"
+  - "gemini-2.5-flash-lite"
+  - "gemini-2.5-pro"
+  - "gemini-3-flash-preview"
+  - "gemini-3.1-flash-lite-preview"
+  - "gemini-3.1-pro-preview"
+  - "gemini-3-deep-think"
+
 # API Settings
 api:
   max_retries: 3
