@@ -28,7 +28,7 @@ bigquery:
 
 # Google Ads Settings
 google_ads:
-  customer_id: "2900871247"
+  customer_id: ""
   config_path: "../scripts/google-ads.yaml"
 
 # OAuth Settings (for in-app Google Ads re-authorization)

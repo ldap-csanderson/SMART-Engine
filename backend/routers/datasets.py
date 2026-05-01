@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from db import (
     ga_auth_manager, get_ga_client, bq_client, db, ts_to_str,
-    CUSTOMER_ID, MAX_RETRIES, RETRY_DELAY,
+    get_customer_id, MAX_RETRIES, RETRY_DELAY,
     PROJECT_ID, DATASET_ID, T_DATASET_ITEMS,
     SEARCH_VOLUME_TYPES,
 )
@@ -275,7 +275,7 @@ def _ingest_google_ads_keywords(dataset_id: str, source_config: Dict):
     """
     client = get_ga_client()
     urls = source_config.get("urls", [])
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    customer_id = source_config.get("customer_id", get_customer_id())
     total = 0
     try:
         if client is None:
@@ -313,7 +313,7 @@ def _ingest_google_ads_ad_copy(dataset_id: str, source_config: Dict):
     Streams rows per-account, flushing to BQ in batches of _INGEST_BATCH.
     """
     client = get_ga_client()
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    customer_id = source_config.get("customer_id", get_customer_id())
     account_ids = source_config.get("account_ids", [])
     total = 0
     try:
@@ -393,7 +393,7 @@ def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
     """
     from datetime import timedelta
     client = get_ga_client()
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    customer_id = source_config.get("customer_id", get_customer_id())
     account_ids = source_config.get("account_ids", [])
     date_range_days = source_config.get("date_range_days", 90)
     total = 0
@@ -405,7 +405,7 @@ def _ingest_google_ads_search_terms(dataset_id: str, source_config: Dict):
             account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
             print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
             if not account_ids:
-                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
+                account_ids = [customer_id]
 
         ga_service = client.get_service("GoogleAdsService")
         start_date = (datetime.now(timezone.utc) - timedelta(days=date_range_days)).strftime('%Y-%m-%d')
@@ -463,7 +463,7 @@ def _ingest_google_ads_keyword_planner(dataset_id: str, source_config: Dict):
     Streams ideas per-account, flushing to BQ in batches of _INGEST_BATCH.
     """
     client = get_ga_client()
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    customer_id = source_config.get("customer_id", get_customer_id())
     account_ids = source_config.get("account_ids", [])
     total = 0
     try:
@@ -536,7 +536,7 @@ def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
     Streams rows per-account, flushing to BQ in batches of _INGEST_BATCH.
     """
     client = get_ga_client()
-    customer_id = source_config.get("customer_id", CUSTOMER_ID)
+    customer_id = source_config.get("customer_id", get_customer_id())
     account_ids = source_config.get("account_ids", [])
     total = 0
     try:
@@ -547,7 +547,7 @@ def _ingest_google_ads_account_keywords(dataset_id: str, source_config: Dict):
             account_ids = [a["account_id"] for a in discovered if not a["is_manager"]]
             print(f"ℹ️ account_ids was empty — auto-discovered {len(account_ids)} leaf accounts")
             if not account_ids:
-                raise RuntimeError(f"No accessible leaf accounts found under {customer_id}")
+                account_ids = [customer_id]
 
         ga_service = client.get_service("GoogleAdsService")
         query = """
@@ -678,9 +678,9 @@ def list_accounts():
     if client is None:
         raise HTTPException(503, "Google Ads client not connected. Please re-authorize via Settings.")
     try:
-        accounts = _get_accessible_accounts(client, CUSTOMER_ID)
-        is_mcc = any(a["is_manager"] for a in accounts)
+        accounts = _get_accessible_accounts(client, get_customer_id())
         leaf_accounts = [a for a in accounts if not a["is_manager"]]
+        is_mcc = len(leaf_accounts) > 1 or any(a["is_manager"] for a in accounts)
         return AccountsResponse(
             accounts=[AccountInfo(**a) for a in leaf_accounts],
             is_mcc=is_mcc,
@@ -745,7 +745,7 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
     source_config = payload.source_config or {}
 
     if payload.type in GOOGLE_ADS_TYPES:
-        source_config = {"customer_id": CUSTOMER_ID, **source_config}
+        source_config = {"customer_id": get_customer_id(), **source_config}
 
     # Deduplicate text_list items up-front — do NOT store in Firestore (1MB doc limit).
     items_to_ingest = None

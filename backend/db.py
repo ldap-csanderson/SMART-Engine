@@ -24,7 +24,8 @@ MODEL_GEMINI = config["bigquery"]["models"]["gemini_flash"]
 MODEL_EMBEDDINGS = config["bigquery"]["models"]["text_embeddings"]
 
 # Misc
-CUSTOMER_ID = config["google_ads"]["customer_id"]
+# The config.yaml default (blank on fresh installs). Use get_customer_id() at runtime.
+CUSTOMER_ID = config["google_ads"].get("customer_id", "")
 MAX_RETRIES = config["api"]["max_retries"]
 RETRY_DELAY = config["api"]["retry_delay_seconds"]
 FILTER_BATCH_SIZE = config["bigquery"].get("filter_batch_size", 500)
@@ -73,6 +74,46 @@ try:
 except Exception as e:
     print(f"❌ Failed to initialize Firestore client: {e}")
     db = None
+
+
+# ---------------------------------------------------------------------------
+# Customer ID helpers (dynamic — configurable via Settings UI)
+# ---------------------------------------------------------------------------
+
+def get_customer_id() -> str:
+    """Return the active Google Ads Customer ID.
+
+    Reads from Firestore settings/google_ads (customer_id field) if set,
+    otherwise falls back to the value from config.yaml. Strips dashes so
+    both formatted (XXX-XXX-XXXX) and plain numeric IDs are accepted.
+    """
+    if db:
+        try:
+            doc = db.collection("settings").document("google_ads").get()
+            if doc.exists:
+                cid = doc.to_dict().get("customer_id", "")
+                if cid:
+                    return str(cid).replace("-", "")
+        except Exception:
+            pass
+    return CUSTOMER_ID
+
+
+def save_customer_id(new_cid: str) -> str:
+    """Persist a new Customer ID to Firestore. Returns the normalised CID.
+
+    Strips dashes and validates that the result is numeric.
+    Raises ValueError if the CID is not valid.
+    """
+    normalised = str(new_cid).strip().replace("-", "")
+    if not normalised.isdigit():
+        raise ValueError(f"Invalid Customer ID '{new_cid}' — must be numeric (dashes OK)")
+    if db:
+        db.collection("settings").document("google_ads").set(
+            {"customer_id": normalised},
+            merge=True,
+        )
+    return normalised
 
 
 def get_ga_client():

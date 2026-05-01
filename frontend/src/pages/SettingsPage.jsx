@@ -55,10 +55,17 @@ export default function SettingsPage() {
   const [reauthorizing, setReauthorizing] = useState(false)
   const [authMessage, setAuthMessage] = useState(null)
 
+  // --- google ads account (CID) ---
+  const [cidValue, setCidValue] = useState('')
+  const [cidSource, setCidSource] = useState(null)
+  const [cidLoading, setCidLoading] = useState(true)
+  const [cidSaving, setCidSaving] = useState(false)
+  const [cidMessage, setCidMessage] = useState(null)
+
   // --- prompts ---
   const [defaults, setDefaults] = useState(null)
-  const [saved, setSaved] = useState(null)       // last-saved values from API
-  const [edited, setEdited] = useState({})       // local edits (field -> string)
+  const [saved, setSaved] = useState(null)
+  const [edited, setEdited] = useState({})
   const [activeTab, setActiveTab] = useState(PROMPT_TABS[0].key)
   const [promptsLoading, setPromptsLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -145,6 +152,54 @@ export default function SettingsPage() {
   }
 
   // --------------------------------------------------------------------------
+  // Google Ads Account (CID)
+  // --------------------------------------------------------------------------
+
+  const fetchSettings = useCallback(async () => {
+    setCidLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`)
+      if (res.ok) {
+        const data = await res.json()
+        setCidValue(data.customer_id || '')
+        setCidSource(data.customer_id_source || 'config')
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setCidLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchSettings() }, [fetchSettings])
+
+  const handleSaveCid = async () => {
+    const trimmed = cidValue.trim()
+    if (!trimmed) return
+    setCidMessage(null)
+    setCidSaving(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/settings/google-ads`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_id: trimmed }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setCidMessage({ type: 'error', text: data.detail || 'Failed to save Customer ID.' })
+      } else {
+        setCidValue(data.customer_id)
+        setCidSource('firestore')
+        setCidMessage({ type: 'success', text: 'Customer ID saved successfully.' })
+      }
+    } catch {
+      setCidMessage({ type: 'error', text: 'Network error saving Customer ID.' })
+    } finally {
+      setCidSaving(false)
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Prompts
   // --------------------------------------------------------------------------
 
@@ -159,7 +214,6 @@ export default function SettingsPage() {
       const defs = await defaultsRes.json()
       setSaved(current)
       setDefaults(defs)
-      // Initialise local edits to the current saved values
       const initial = {}
       PROMPT_TABS.forEach(({ key }) => { initial[key] = current[key] ?? '' })
       setEdited(initial)
@@ -239,6 +293,62 @@ export default function SettingsPage() {
           <ServiceRow label="Google Ads API" connected={health?.google_ads_connected} loading={healthLoading} />
           <ServiceRow label="BigQuery"        connected={health?.bigquery_connected}   loading={healthLoading} />
           <ServiceRow label="Firestore"       connected={health?.firestore_connected}  loading={healthLoading} />
+        </div>
+      </div>
+
+      {/* ── Google Ads Account ─────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900">Google Ads Account</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Set the top-level Customer ID (MCC or direct account) used for all Google Ads data pulls.
+            Accepts plain numeric IDs or formatted IDs (e.g.{' '}
+            <code className="font-mono text-xs bg-gray-100 px-1 rounded">291-673-2323</code>).
+          </p>
+        </div>
+        <div className="px-6 py-5">
+          {cidMessage && (
+            <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
+              cidMessage.type === 'success'
+                ? 'bg-green-50 text-green-700 border border-green-200'
+                : 'bg-red-50 text-red-700 border border-red-200'
+            }`}>
+              {cidMessage.text}
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Customer ID</label>
+              {cidLoading ? (
+                <div className="h-9 bg-gray-100 rounded-lg animate-pulse" />
+              ) : (
+                <input
+                  type="text"
+                  value={cidValue}
+                  onChange={(e) => { setCidValue(e.target.value); setCidMessage(null) }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveCid()}
+                  placeholder="e.g. 1234567890"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              )}
+            </div>
+            <div className="pt-5">
+              <button
+                onClick={handleSaveCid}
+                disabled={cidSaving || cidLoading || !cidValue.trim()}
+                className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {cidSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+          {!cidLoading && cidSource && (
+            <p className="mt-2 text-xs text-gray-400">
+              {cidSource === 'firestore'
+                ? 'This value is stored in Firestore and overrides the config file default.'
+                : 'Using default value from config file. Save a new value to override it.'}
+            </p>
+          )}
         </div>
       </div>
 
