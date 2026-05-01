@@ -126,6 +126,26 @@ def _parse_action(raw: str) -> Optional[dict]:
     return None
 
 
+def _get_chat_type_prompt(type_key: str) -> str:
+    """Load a type-specific context prompt from Firestore settings/chat_prompts.
+
+    Falls back to the hardcoded defaults from settings.py if Firestore is unavailable
+    or the key hasn't been overridden.
+    """
+    from routers.settings import _get_chat_prompt_defaults
+    defaults = _get_chat_prompt_defaults()
+    if db:
+        try:
+            doc = db.collection("settings").document("chat_prompts").get()
+            if doc.exists:
+                override = doc.to_dict().get(type_key)
+                if override:
+                    return override
+        except Exception:
+            pass
+    return defaults.get(type_key, "")
+
+
 def _build_history_block(history: Optional[List]) -> str:
     if not history:
         return ""
@@ -194,6 +214,9 @@ _DATASET_SYSTEM_PROMPT = """You are a data analyst assistant for a keyword/adver
 DATASET: {dataset_name} (ID: {dataset_id}, Type: {dataset_type})
 TABLE: {table}
 IMPORTANT: Every query MUST include: WHERE dataset_id = '{dataset_id}'
+
+DATASET TYPE CONTEXT:
+{type_context}
 
 COLUMN SCHEMA:
   item_text                STRING     — the keyword, search term, URL, or ad copy text
@@ -286,11 +309,13 @@ def dataset_chat_message(dataset_id: str, payload: DatasetChatMessageRequest):
     dataset_name = d.get("name", "Unnamed")
     dataset_type = d.get("type", "unknown")
 
+    type_context = _get_chat_type_prompt(dataset_type)
     system = _DATASET_SYSTEM_PROMPT.format(
         dataset_name=dataset_name,
         dataset_id=dataset_id,
         dataset_type=dataset_type,
         table=_TABLE_ITEMS,
+        type_context=type_context or "(No additional context configured for this dataset type.)",
     )
     history_block = _build_history_block(payload.history)
     prompt = f"{system}{history_block}\n\nUser: {payload.message}\nAssistant:"
@@ -386,11 +411,13 @@ def dataset_chat_peek(dataset_id: str, payload: DatasetPeekRequest):
     if payload.explanation:
         data_block = f"[Peek reason: {payload.explanation}]\n{data_block}"
 
+    type_context = _get_chat_type_prompt(dataset_type)
     system = _DATASET_SYSTEM_PROMPT.format(
         dataset_name=dataset_name,
         dataset_id=dataset_id,
         dataset_type=dataset_type,
         table=_TABLE_ITEMS,
+        type_context=type_context or "(No additional context configured for this dataset type.)",
     )
     history_block = _build_history_block(payload.history)
     prompt = (
@@ -463,6 +490,9 @@ GAP ANALYSIS: {analysis_name} (ID: {analysis_id})
 SOURCE DATASET: {source_name} → TARGET DATASET: {target_name}
 TABLE: {table}
 IMPORTANT: Every query MUST include: WHERE analysis_id = '{analysis_id}'
+
+ANALYSIS CONTEXT:
+{type_context}
 
 COLUMN SCHEMA (gap_analysis_results):
   analysis_id          STRING   — filter key
@@ -578,6 +608,7 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
     else:
         available_filters_text = "  (none available)"
 
+    gap_type_context = _get_chat_type_prompt("gap_analysis")
     system = _GAP_SYSTEM_PROMPT.format(
         analysis_name=analysis_name,
         analysis_id=analysis_id,
@@ -586,6 +617,7 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
         table=_TABLE_GAP,
         filter_context=filter_context,
         available_filters=available_filters_text,
+        type_context=gap_type_context or "(No additional context configured.)",
     )
     history_block = _build_history_block(payload.history)
     prompt = f"{system}{history_block}\n\nUser: {payload.message}\nAssistant:"
@@ -672,6 +704,7 @@ def gap_chat_peek(analysis_id: str, payload: GapPeekRequest):
         f"  - {f.get('name', '?')}" for f in available_filters
     ) or "  (none)"
 
+    gap_type_context = _get_chat_type_prompt("gap_analysis")
     system = _GAP_SYSTEM_PROMPT.format(
         analysis_name=analysis_name,
         analysis_id=analysis_id,
@@ -680,6 +713,7 @@ def gap_chat_peek(analysis_id: str, payload: GapPeekRequest):
         table=_TABLE_GAP,
         filter_context=filter_context,
         available_filters=available_filters_text,
+        type_context=gap_type_context or "(No additional context configured.)",
     )
     history_block = _build_history_block(payload.history)
     prompt = (
