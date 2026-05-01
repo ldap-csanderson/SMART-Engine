@@ -52,6 +52,7 @@ export default function GapAnalysisDetailPage() {
   const [highlightInput, setHighlightInput] = useState('0.2')
 
   const [renaming, setRenaming] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const [showRunFiltersModal, setShowRunFiltersModal] = useState(false)
   const [deleteModal, setDeleteModal] = useState(false)
   const loadedFilterResultsRef = useRef(new Set())
@@ -269,6 +270,16 @@ export default function GapAnalysisDetailPage() {
     finally { setRenaming(false) }
   }
 
+  const handleRetry = async () => {
+    setRetrying(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/gap-analyses/${analysisId}/retry`, { method: 'POST' })
+      if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed to retry') }
+      setAnalysis(await res.json())
+    } catch (err) { alert(`Retry failed: ${err.message}`) }
+    finally { setRetrying(false) }
+  }
+
   const handleMinSearchesBlur = () => {
     const v = parseInt(minSearchesInput, 10)
     if (!isNaN(v) && v >= 0) { setResultsLoading(true); setMinSearches(v); setPage(0); setExpandedRows(new Set()) }
@@ -408,6 +419,15 @@ export default function GapAnalysisDetailPage() {
                   {chatOpen ? '✕ Close Analysis' : '✨ Analyze'}
                 </button>
               )}
+              {analysis.status === 'failed' && (
+                <button
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="text-sm px-3 py-1.5 rounded-lg border font-medium bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {retrying ? 'Retrying…' : '↺ Retry'}
+                </button>
+              )}
               <button onClick={() => setDeleteModal(true)} className="text-sm text-red-500 hover:text-red-700 border border-red-200 px-3 py-1.5 rounded-lg">Delete</button>
             </div>
           </div>
@@ -439,6 +459,27 @@ export default function GapAnalysisDetailPage() {
             <p className="text-sm text-gray-400 mt-1">
               {analysis.total_items_analyzed > 0 ? `Running embedding pipeline on ${analysis.total_items_analyzed.toLocaleString()} items.` : 'Running embedding pipeline. This may take several minutes.'}
             </p>
+          </div>
+        ) : analysis.status === 'failed' ? (
+          <div className="bg-white rounded-lg shadow p-8">
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-gray-900 mb-1">Analysis failed</h3>
+                {analysis.error_message && (
+                  <pre className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-3 overflow-auto max-h-40 whitespace-pre-wrap mb-4">{analysis.error_message}</pre>
+                )}
+                <button
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="px-4 py-2 text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg disabled:opacity-50"
+                >
+                  {retrying ? 'Retrying…' : '↺ Retry Analysis'}
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="flex gap-4 items-start">

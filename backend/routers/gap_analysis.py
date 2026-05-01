@@ -400,6 +400,82 @@ def get_gap_analysis(analysis_id: str):
     return _doc_to_gap_analysis(doc.to_dict())
 
 
+@router.post("/{analysis_id}/retry", response_model=GapAnalysis)
+def retry_gap_analysis(analysis_id: str, background_tasks: BackgroundTasks):
+    """Retry a failed gap analysis using its original parameters."""
+    if not db:
+        raise HTTPException(503, "Firestore not initialized")
+    if not bq_client:
+        raise HTTPException(503, "BigQuery not initialized")
+
+    doc = db.collection("gap_analyses").document(analysis_id).get()
+    if not doc.exists:
+        raise HTTPException(404, f"Analysis {analysis_id} not found")
+    d = doc.to_dict()
+
+    if d.get("status") != "failed":
+        raise HTTPException(400, f"Only failed analyses can be retried (status={d.get('status')})")
+
+    # Re-resolve source dataset IDs
+    source_dataset_ids = []
+    source_dataset_type = d.get("source_dataset_type", "text_list")
+    if d.get("source_is_group"):
+        grp = db.collection("dataset_groups").document(d["source_dataset_id"]).get()
+        if not grp.exists:
+            raise HTTPException(404, "Source dataset group no longer exists")
+        source_dataset_ids = grp.to_dict().get("dataset_ids", [])
+    else:
+        source_dataset_ids = [d["source_dataset_id"]]
+
+    # Re-resolve target dataset IDs
+    target_dataset_ids = []
+    target_dataset_type = "text_list"
+    if d.get("target_is_group"):
+        grp = db.collection("dataset_groups").document(d["target_dataset_id"]).get()
+        if not grp.exists:
+            raise HTTPException(404, "Target dataset group no longer exists")
+        grp_data = grp.to_dict()
+        target_dataset_ids = grp_data.get("dataset_ids", [])
+        first_ds = db.collection("datasets").document(target_dataset_ids[0]).get() if target_dataset_ids else None
+        if first_ds and first_ds.exists:
+            target_dataset_type = first_ds.to_dict().get("type", "text_list")
+    else:
+        target_dataset_ids = [d["target_dataset_id"]]
+        tgt_ds = db.collection("datasets").document(d["target_dataset_id"]).get()
+        if tgt_ds.exists:
+            target_dataset_type = tgt_ds.to_dict().get("type", "text_list")
+
+    # Delete any partial BQ results from the failed run
+    try:
+        bq_client.query(
+            f"DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{T_GAP_ANALYSIS}` WHERE analysis_id = '{analysis_id}'"
+        ).result()
+    except Exception as e:
+        print(f"⚠️ Could not clear partial BQ results for retry of {analysis_id}: {e}")
+
+    # Reset status to processing
+    db.collection("gap_analyses").document(analysis_id).update({
+        "status": "processing",
+        "error_message": None,
+        "total_items_analyzed": 0,
+    })
+
+    background_tasks.add_task(
+        _run_analysis_background,
+        analysis_id,
+        source_dataset_ids,
+        source_dataset_type,
+        target_dataset_ids,
+        target_dataset_type,
+        d.get("min_monthly_searches", 1000),
+        d.get("use_intent_normalization", False),
+        d.get("top_k", 10),
+    )
+
+    updated_doc = db.collection("gap_analyses").document(analysis_id).get().to_dict()
+    return _doc_to_gap_analysis(updated_doc)
+
+
 class FilterResultRow(BaseModel):
     keyword_text: str
     result: Optional[bool]
