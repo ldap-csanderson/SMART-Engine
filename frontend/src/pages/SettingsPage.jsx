@@ -184,16 +184,17 @@ export default function SettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customer_id: trimmed }),
       })
-      const data = await res.json()
+      let data = null
+      try { data = await res.json() } catch { /* non-JSON body */ }
       if (!res.ok) {
-        setCidMessage({ type: 'error', text: data.detail || 'Failed to save Customer ID.' })
+        setCidMessage({ type: 'error', text: data?.detail || `Server error (${res.status})` })
       } else {
         setCidValue(data.customer_id)
         setCidSource('firestore')
         setCidMessage({ type: 'success', text: 'Customer ID saved successfully.' })
       }
     } catch {
-      setCidMessage({ type: 'error', text: 'Network error saving Customer ID.' })
+      setCidMessage({ type: 'error', text: 'Network error — could not reach server.' })
     } finally {
       setCidSaving(false)
     }

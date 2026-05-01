@@ -186,6 +186,8 @@ def update_google_ads_settings(payload: GoogleAdsSettingsUpdate):
         normalised = save_customer_id(payload.customer_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to save Customer ID: {exc}")
 
     # 2. Update login_customer_id in Secret Manager and reload the GA client in-memory
     if ga_auth_manager:
