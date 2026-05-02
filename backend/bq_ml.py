@@ -135,6 +135,30 @@ def migrate_to_gemini_embedding_2():
 
 
 # ---------------------------------------------------------------------------
+# Schema migrations
+# ---------------------------------------------------------------------------
+
+def add_image_url_column_if_not_exist():
+    """Add image_url column to dataset_items if not already present.
+
+    Required for image_urls and image_google_drive dataset types.
+    Uses ALTER TABLE ADD COLUMN IF NOT EXISTS so it is idempotent.
+    """
+    if bq_client is None:
+        print("⚠️ BQ client not available — skipping image_url column migration")
+        return
+    try:
+        run_bq(
+            f"""ALTER TABLE {_t(T_DATASET_ITEMS)}
+                ADD COLUMN IF NOT EXISTS image_url STRING
+                OPTIONS(description='GCS path or original URL for image dataset items')""",
+            "ALTER TABLE dataset_items ADD COLUMN IF NOT EXISTS image_url",
+        )
+    except Exception as e:
+        print(f"⚠️ Could not add image_url column (may already exist): {e}")
+
+
+# ---------------------------------------------------------------------------
 # Vector index management
 # ---------------------------------------------------------------------------
 

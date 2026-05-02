@@ -12,6 +12,7 @@ from bq_ml import (
     create_models_if_not_exist,
     create_vector_index_if_not_exist,
     migrate_to_gemini_embedding_2,
+    add_image_url_column_if_not_exist,
 )
 from routers.settings import _ensure_defaults
 from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
@@ -32,6 +33,7 @@ def _startup_tasks():
     """
     create_models_if_not_exist()
     migrate_to_gemini_embedding_2()
+    add_image_url_column_if_not_exist()
     create_vector_index_if_not_exist()
     _ensure_defaults()
     resume_stuck_filter_executions()

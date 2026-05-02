@@ -30,6 +30,8 @@ VALID_TYPES = {
     "google_ads_account_keywords",
     "google_ads_landing_pages",
     "text_list",
+    "image_urls",
+    "image_google_drive",
 }
 
 GOOGLE_ADS_TYPES = {
@@ -40,6 +42,15 @@ GOOGLE_ADS_TYPES = {
     "google_ads_account_keywords",
     "google_ads_landing_pages",
 }
+
+# Dataset types that store images — item_text is the image URL
+IMAGE_TYPES = {
+    "image_urls",
+    "image_google_drive",
+}
+
+# Image file extensions considered valid for image_urls ingestion
+_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif', '.bmp', '.tiff', '.tif'}
 
 # Landing page URL source options
 URL_SOURCES = {
@@ -120,6 +131,35 @@ class AccountsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # BQ helpers
 # ---------------------------------------------------------------------------
+
+def _insert_image_items_to_bq(dataset_id: str, items: List[Dict[str, Any]]):
+    """Insert image items (with image_url field) into dataset_items BQ table.
+
+    Kept separate from _insert_items_to_bq so non-image types never attempt
+    to write image_url (which requires the column to exist from the startup
+    ALTER TABLE migration).
+    """
+    if not bq_client or not items:
+        return
+    table_id = f"{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for item in items:
+        rows.append({
+            "dataset_id": dataset_id,
+            "item_text": item["item_text"],
+            "added_at": timestamp,
+            "image_url": item.get("image_url"),
+        })
+    chunk_size = 500
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i:i + chunk_size]
+        errors = bq_client.insert_rows_json(table_id, chunk)
+        if errors:
+            print(f"❌ BQ insert errors (image): {errors}")
+        else:
+            print(f"✅ Inserted {len(chunk)} image rows to dataset_items")
+
 
 def _insert_items_to_bq(dataset_id: str, items: List[Dict[str, Any]]):
     """Insert a batch of items into dataset_items BQ table.
@@ -741,6 +781,65 @@ def _ingest_google_ads_landing_pages(dataset_id: str, source_config: Dict):
         _mark_failed(dataset_id, str(e))
 
 
+def _ingest_image_urls(dataset_id: str, source_config: Dict):
+    """Background: validate and store image URLs as dataset items.
+
+    Parses URLs from source_config.urls, validates each looks like an image
+    (by extension), and stores item_text=URL, image_url=URL.
+    URLs without a recognized extension are accepted permissively (CDN URLs
+    often omit extensions). Only skips URLs that start with a non-http scheme
+    or have an extension that is clearly not an image.
+    """
+    from urllib.parse import urlparse
+    import os as _os
+
+    urls = source_config.get("urls", [])
+    total = 0
+    skipped = 0
+    try:
+        batch: List[Dict] = []
+        for raw_url in urls:
+            url = raw_url.strip()
+            if not url:
+                continue
+            try:
+                parsed = urlparse(url)
+                if not parsed.scheme.startswith("http"):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
+            # Only reject URLs with an extension that's clearly NOT an image.
+            # URLs with no extension (CDN, object storage) are accepted.
+            path = parsed.path.lower()
+            ext = _os.path.splitext(path)[1]
+            if ext and ext not in _IMAGE_EXTENSIONS:
+                print(f"⚠️ Skipping non-image URL: {url} (ext={ext})")
+                skipped += 1
+                continue
+            batch.append({"item_text": url, "image_url": url})
+            if len(batch) >= _INGEST_BATCH:
+                _insert_image_items_to_bq(dataset_id, batch)
+                total += len(batch)
+                batch = []
+        if batch:
+            _insert_image_items_to_bq(dataset_id, batch)
+            total += len(batch)
+        if skipped:
+            print(f"⚠️ Skipped {skipped} invalid/non-image URLs")
+        count = _count_distinct_items(dataset_id)
+        db.collection("datasets").document(dataset_id).update({
+            "status": "completed",
+            "item_count": count,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        print(f"✅ Dataset {dataset_id} (image_urls) completed — {count} distinct images ({total} raw, {skipped} skipped)")
+    except Exception as e:
+        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
+        _mark_failed(dataset_id, str(e))
+
+
 def _ingest_text_list(dataset_id: str, items: List[str]):
     """Background: insert text_list items into BQ in batches."""
     total = 0
@@ -926,6 +1025,13 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
         background_tasks.add_task(_ingest_google_ads_landing_pages, dataset_id, source_config)
     elif payload.type == "text_list":
         background_tasks.add_task(_ingest_text_list, dataset_id, items_to_ingest)
+    elif payload.type == "image_urls":
+        urls = [u.strip() for u in (source_config.get("urls") or []) if u.strip()]
+        if not urls:
+            raise HTTPException(400, "source_config.urls is required and must not be empty for image_urls datasets")
+        background_tasks.add_task(_ingest_image_urls, dataset_id, {"urls": urls})
+    elif payload.type == "image_google_drive":
+        _mark_failed(dataset_id, "Google Drive integration coming soon — use Image URLs type for now")
 
     doc = db.collection("datasets").document(dataset_id).get().to_dict()
     return Dataset(
@@ -998,9 +1104,10 @@ def get_dataset_items(
     offset = max(0, offset)
 
     table = f"`{PROJECT_ID}.{DATASET_ID}.{T_DATASET_ITEMS}`"
+    # image_url column added via ALTER TABLE migration on startup — safe to select always
     rows = bq_client.query(f"""
         SELECT item_text, avg_monthly_searches, competition, competition_index,
-               low_top_of_page_bid_usd, high_top_of_page_bid_usd, source_url, added_at
+               low_top_of_page_bid_usd, high_top_of_page_bid_usd, source_url, image_url, added_at
         FROM {table}
         WHERE dataset_id = '{dataset_id}'
         QUALIFY ROW_NUMBER() OVER (PARTITION BY item_text ORDER BY added_at DESC) = 1
@@ -1016,6 +1123,7 @@ def get_dataset_items(
         "low_top_of_page_bid_usd": row.low_top_of_page_bid_usd,
         "high_top_of_page_bid_usd": row.high_top_of_page_bid_usd,
         "source_url": row.source_url,
+        "image_url": row.image_url,
     } for row in rows]
 
     return {

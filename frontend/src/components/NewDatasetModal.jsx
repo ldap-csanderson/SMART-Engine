@@ -9,6 +9,7 @@ const TYPES = [
   { value: 'google_ads_keyword_planner', label: 'Keyword Planner (Account-level)', needsAds: true },
   { value: 'google_ads_landing_pages', label: 'Landing Pages (URLs)', needsAds: true },
   { value: 'text_list', label: 'Text List (manual)', needsAds: false },
+  { value: 'image_urls', label: '🖼️ Image URLs', needsAds: false },
 ]
 
 const LP_URL_SOURCES = [
@@ -26,6 +27,7 @@ export default function NewDatasetModal({ onClose, onCreated }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('text_list')
   const [urls, setUrls] = useState('')
+  const [imageUrls, setImageUrls] = useState('')
   const [textItems, setTextItems] = useState('')
   const [accounts, setAccounts] = useState([])
   const [selectedAccounts, setSelectedAccounts] = useState([])
@@ -39,6 +41,7 @@ export default function NewDatasetModal({ onClose, onCreated }) {
   const isLpType = type === 'google_ads_landing_pages'
   const isKeywordsUrl = type === 'google_ads_keywords'
   const isTextList = type === 'text_list'
+  const isImageUrls = type === 'image_urls'
 
   useEffect(() => {
     if (!needsAds) return
@@ -69,6 +72,7 @@ export default function NewDatasetModal({ onClose, onCreated }) {
     if (isTextList && !textItems.trim()) { setError('Please enter at least one item'); return }
     if (isKeywordsUrl && !urls.trim()) { setError('Please enter at least one URL'); return }
     if (isLpType && lpSources.length === 0) { setError('Select at least one URL source'); return }
+    if (isImageUrls && !imageUrls.trim()) { setError('Please enter at least one image URL'); return }
 
     setCreating(true)
     setError(null)
@@ -86,6 +90,10 @@ export default function NewDatasetModal({ onClose, onCreated }) {
       body.source_config = {
         sources: lpSources,
         account_ids: selectedAccounts,
+      }
+    } else if (isImageUrls) {
+      body.source_config = {
+        urls: imageUrls.split('\n').map(s => s.trim()).filter(Boolean),
       }
     } else if (needsAds) {
       body.source_config = { account_ids: selectedAccounts }
@@ -198,6 +206,23 @@ export default function NewDatasetModal({ onClose, onCreated }) {
                 placeholder="keyword one&#10;keyword two&#10;keyword three"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
               />
+            </div>
+          )}
+
+          {/* Image URLs input */}
+          {isImageUrls && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Image URLs <span className="text-gray-400 font-normal">(one per line)</span></label>
+              <textarea
+                value={imageUrls}
+                onChange={e => setImageUrls(e.target.value)}
+                rows={6}
+                placeholder="https://example.com/image1.jpg&#10;https://cdn.example.com/photo2.png&#10;https://storage.googleapis.com/bucket/img3.webp"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Supports JPG, PNG, WebP, GIF, SVG, AVIF, and CDN URLs without extensions.
+              </p>
             </div>
           )}
 

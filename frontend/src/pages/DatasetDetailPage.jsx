@@ -13,10 +13,36 @@ const TYPE_LABELS = {
   google_ads_keyword_planner: 'Keyword Planner (Account)',
   google_ads_landing_pages: 'Landing Pages',
   text_list: 'Text List',
+  image_urls: '🖼️ Image URLs',
+  image_google_drive: '🖼️ Google Drive Images',
 }
 
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 const URL_TYPES = new Set(['google_ads_landing_pages'])
+const IMAGE_TYPES = new Set(['image_urls', 'image_google_drive'])
+
+function ImageThumbnail({ url, alt }) {
+  const [broken, setBroken] = useState(false)
+  if (broken) {
+    return (
+      <div className="aspect-square rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center">
+        <span className="text-gray-300 text-2xl">🖼️</span>
+      </div>
+    )
+  }
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" title={url}>
+      <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border border-gray-200 hover:border-indigo-300 transition-colors">
+        <img
+          src={url}
+          alt={alt || url}
+          className="w-full h-full object-cover"
+          onError={() => setBroken(true)}
+        />
+      </div>
+    </a>
+  )
+}
 
 export default function DatasetDetailPage() {
   const { datasetId } = useParams()
@@ -153,6 +179,7 @@ export default function DatasetDetailPage() {
         avg_monthly_searches: item.avg_monthly_searches ?? '',
         competition: item.competition || '',
         source_url: item.source_url || '',
+        image_url: item.image_url || '',
       }))
     } catch { return [] }
   }, [datasetId])
@@ -162,6 +189,7 @@ export default function DatasetDetailPage() {
 
   const hasSearchVolume = SEARCH_VOLUME_TYPES.has(dataset.type)
   const isUrlType = URL_TYPES.has(dataset.type)
+  const isImageType = IMAGE_TYPES.has(dataset.type)
 
   // Decide what to show in the table
   const tableItems = customQueryRows !== null
@@ -218,7 +246,7 @@ export default function DatasetDetailPage() {
 
       {/* Main layout: table | chat panel */}
       <div className={`flex gap-4 items-start ${chatOpen ? '' : ''}`}>
-        {/* Items table */}
+        {/* Items table / thumbnail grid */}
         <div className={`${chatOpen ? 'flex-1 min-w-0' : 'w-full'}`}>
           {customQuerySql && (
             <div className="mb-3 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center justify-between">
@@ -232,7 +260,7 @@ export default function DatasetDetailPage() {
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-medium text-gray-700 text-sm">
-                {customQueryRows ? 'Query Results' : 'Items'}
+                {customQueryRows ? 'Query Results' : isImageType ? 'Images' : 'Items'}
               </h2>
               <span className="text-xs text-gray-400">
                 {customQueryRows
@@ -242,7 +270,7 @@ export default function DatasetDetailPage() {
             </div>
 
             {itemsLoading && tableItems.length === 0 ? (
-              <div className="p-6 text-gray-400 text-sm">Loading items…</div>
+              <div className="p-6 text-gray-400 text-sm">Loading…</div>
             ) : tableItems.length === 0 ? (
               <div className="p-6 text-gray-400 text-sm">
                 {dataset.status === 'processing' ? 'Ingestion in progress…' : 'No items found.'}
@@ -270,6 +298,18 @@ export default function DatasetDetailPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            ) : isImageType ? (
+              /* Image thumbnail grid */
+              <div className={`p-4 grid gap-3 ${itemsLoading ? 'opacity-50' : ''}`}
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))' }}>
+                {tableItems.map((item, i) => (
+                  <ImageThumbnail
+                    key={i}
+                    url={item.image_url || item.item_text}
+                    alt={`Image ${i + 1}`}
+                  />
+                ))}
               </div>
             ) : (
               /* Normal items table */
