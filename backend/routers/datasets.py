@@ -13,8 +13,10 @@ from db import (
     ga_auth_manager, get_ga_client, bq_client, db, ts_to_str,
     get_customer_id, MAX_RETRIES, RETRY_DELAY,
     PROJECT_ID, DATASET_ID, T_DATASET_ITEMS,
-    SEARCH_VOLUME_TYPES,
+    SEARCH_VOLUME_TYPES, config,
 )
+
+_GCS_IMAGE_BUCKET = config.get("gcs", {}).get("image_bucket", "smart-engine-images")
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -781,21 +783,54 @@ def _ingest_google_ads_landing_pages(dataset_id: str, source_config: Dict):
         _mark_failed(dataset_id, str(e))
 
 
-def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
-    """Background: list and store image files from a Google Drive folder.
+# ---------------------------------------------------------------------------
+# GCS image upload helper
+# ---------------------------------------------------------------------------
 
-    Requires the folder to be shared as 'Anyone with the link can view'.
-    Stores Drive direct download URLs as item_text and image_url.
+_MIME_TO_EXT = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+    "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif",
+    "image/svg+xml": ".svg", "image/bmp": ".bmp", "image/tiff": ".tiff",
+}
+
+
+def _upload_bytes_to_gcs(image_bytes: bytes, dataset_id: str, key: str,
+                           mime_type: str = "image/jpeg") -> str:
+    """Upload image bytes to GCS and return the public HTTPS URL.
+
+    key: a unique string used to derive the blob name (e.g. original URL or Drive file ID).
+    Returns https://storage.googleapis.com/{bucket}/{blob_name}.
+    """
+    import hashlib
+    from google.cloud import storage as _gcs
+
+    ext = _MIME_TO_EXT.get(mime_type.split(";")[0].strip(), ".jpg")
+    blob_name = f"{dataset_id}/{hashlib.sha256(key.encode()).hexdigest()[:24]}{ext}"
+
+    client = _gcs.Client(project=PROJECT_ID)
+    bucket = client.bucket(_GCS_IMAGE_BUCKET)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_string(image_bytes, content_type=mime_type)
+
+    return f"https://storage.googleapis.com/{_GCS_IMAGE_BUCKET}/{blob_name}"
+
+
+def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
+    """Background: download Drive folder images → upload to GCS → store GCS URL.
+
+    Downloads each image from Drive using the stored OAuth access token,
+    uploads to GCS (public), and stores the GCS URL as both item_text and
+    image_url so the UI and embedding pipeline can always access them.
     """
     import re
-    from routers.drive_auth import list_drive_folder_images
+    import requests as _requests
+    from routers.drive_auth import list_drive_folder_images, _get_drive_access_token
 
     folder_url = source_config.get("folder_url", "").strip()
     if not folder_url:
         _mark_failed(dataset_id, "folder_url is required for Google Drive image datasets")
         return
 
-    # Extract folder ID from URL or use as-is
     folder_id = folder_url
     if "drive.google.com" in folder_id:
         m = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_id)
@@ -807,6 +842,7 @@ def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
                 folder_id = m.group(1)
 
     total = 0
+    failed = 0
     try:
         files = list_drive_folder_images(folder_id)
         if not files:
@@ -818,16 +854,34 @@ def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
             print(f"⚠️ Dataset {dataset_id}: no image files found in Drive folder {folder_id}")
             return
 
+        access_token = _get_drive_access_token()
+        if not access_token:
+            _mark_failed(dataset_id, "Could not get Drive access token — re-authorize via Settings")
+            return
+
         batch: List[Dict] = []
         for f in files:
             file_id = f["id"]
-            # Public download URL — works when folder is "Anyone with link can view"
-            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            batch.append({"item_text": download_url, "image_url": download_url})
+            mime = f.get("mimeType", "image/jpeg")
+            try:
+                r = _requests.get(
+                    f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=60,
+                )
+                r.raise_for_status()
+                gcs_url = _upload_bytes_to_gcs(r.content, dataset_id, file_id, mime)
+                batch.append({"item_text": gcs_url, "image_url": gcs_url})
+            except Exception as e:
+                print(f"⚠️ Could not process Drive file {file_id}: {e}")
+                failed += 1
+                continue
+
             if len(batch) >= _INGEST_BATCH:
                 _insert_image_items_to_bq(dataset_id, batch)
                 total += len(batch)
                 batch = []
+
         if batch:
             _insert_image_items_to_bq(dataset_id, batch)
             total += len(batch)
@@ -838,27 +892,27 @@ def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
             "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (image_google_drive) completed — {count} images ({total} raw)")
+        print(f"✅ Dataset {dataset_id} (image_google_drive) done — {count} images ({failed} failed)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
         _mark_failed(dataset_id, str(e))
 
 
 def _ingest_image_urls(dataset_id: str, source_config: Dict):
-    """Background: validate and store image URLs as dataset items.
+    """Background: download image URLs → upload to GCS → store GCS URL.
 
-    Parses URLs from source_config.urls, validates each looks like an image
-    (by extension), and stores item_text=URL, image_url=URL.
-    URLs without a recognized extension are accepted permissively (CDN URLs
-    often omit extensions). Only skips URLs that start with a non-http scheme
-    or have an extension that is clearly not an image.
+    Downloads each image from its source URL, uploads to GCS (permanent cache),
+    and stores item_text=original_url, image_url=gcs_url so the UI and
+    embedding pipeline always have a reliable image source.
     """
     from urllib.parse import urlparse
     import os as _os
+    import requests as _requests
 
     urls = source_config.get("urls", [])
     total = 0
     skipped = 0
+    failed = 0
     try:
         batch: List[Dict] = []
         for raw_url in urls:
@@ -873,31 +927,54 @@ def _ingest_image_urls(dataset_id: str, source_config: Dict):
             except Exception:
                 skipped += 1
                 continue
-            # Only reject URLs with an extension that's clearly NOT an image.
-            # URLs with no extension (CDN, object storage) are accepted.
+
             path = parsed.path.lower()
             ext = _os.path.splitext(path)[1]
             if ext and ext not in _IMAGE_EXTENSIONS:
                 print(f"⚠️ Skipping non-image URL: {url} (ext={ext})")
                 skipped += 1
                 continue
-            batch.append({"item_text": url, "image_url": url})
+
+            # Download + upload to GCS
+            try:
+                r = _requests.get(
+                    url, timeout=30,
+                    headers={"User-Agent": "SMART-Engine/3.0"},
+                    allow_redirects=True,
+                )
+                r.raise_for_status()
+                mime = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                if not mime.startswith("image/"):
+                    mime = "image/jpeg"
+                gcs_url = _upload_bytes_to_gcs(r.content, dataset_id, url, mime)
+                batch.append({"item_text": url, "image_url": gcs_url})
+            except Exception as e:
+                print(f"⚠️ Could not download/upload {url[:80]}: {e}")
+                # Fall back: store original URL so the dataset still has the item
+                batch.append({"item_text": url, "image_url": url})
+                failed += 1
+
             if len(batch) >= _INGEST_BATCH:
                 _insert_image_items_to_bq(dataset_id, batch)
                 total += len(batch)
                 batch = []
+
         if batch:
             _insert_image_items_to_bq(dataset_id, batch)
             total += len(batch)
+
         if skipped:
             print(f"⚠️ Skipped {skipped} invalid/non-image URLs")
+        if failed:
+            print(f"⚠️ {failed} images could not be cached to GCS (stored original URL as fallback)")
+
         count = _count_distinct_items(dataset_id)
         db.collection("datasets").document(dataset_id).update({
             "status": "completed",
             "item_count": count,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
-        print(f"✅ Dataset {dataset_id} (image_urls) completed — {count} distinct images ({total} raw, {skipped} skipped)")
+        print(f"✅ Dataset {dataset_id} (image_urls) done — {count} images ({skipped} skipped, {failed} GCS failures)")
     except Exception as e:
         print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
         _mark_failed(dataset_id, str(e))

@@ -159,9 +159,12 @@ def _embed_images_to_bq(
 
     ids_sql = ", ".join(f"'{did}'" for did in dataset_ids)
 
-    # Fetch uncached (dataset_id, item_text) pairs
+    # Fetch uncached (dataset_id, item_text, download_url) triples.
+    # Use image_url (GCS cached copy) for downloading when available,
+    # falling back to item_text (original URL) if image_url is NULL.
     all_rows = list(bq_client.query(f"""
-        SELECT DISTINCT di.dataset_id, di.item_text
+        SELECT DISTINCT di.dataset_id, di.item_text,
+               COALESCE(di.image_url, di.item_text) AS download_url
         FROM {_t(T_DATASET_ITEMS)} di
         LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
           ON di.item_text = de.item_text
@@ -176,10 +179,12 @@ def _embed_images_to_bq(
         print(f"✅ All image embeddings already cached (hash={prompt_hash})")
         return 0
 
-    # Deduplicate by URL: one download+embed per unique URL
-    url_to_datasets: dict = {}
+    # Deduplicate by item_text (canonical key), but download from download_url (GCS)
+    url_to_datasets: dict = {}   # item_text → list[dataset_id]
+    item_to_download: dict = {}  # item_text → download_url
     for row in all_rows:
         url_to_datasets.setdefault(row.item_text, []).append(row.dataset_id)
+        item_to_download[row.item_text] = row.download_url
 
     total = len(url_to_datasets)
     print(f"📸 Embedding {total} unique images (mode={mode}, hash={prompt_hash})...")
@@ -189,9 +194,10 @@ def _embed_images_to_bq(
     bq_rows = []
     timestamp = datetime.now(_tz.utc).isoformat()
 
-    def _process_url(url: str) -> list:
+    def _process_url(item_text: str, download_url: str) -> list:
+        """Download from download_url (GCS), embed, return BQ rows keyed on item_text."""
         try:
-            image_bytes, mime_type = _download_image(url)
+            image_bytes, mime_type = _download_image(download_url)
             if mode == "direct":
                 embedding = _embed_image_direct_sdk(image_bytes, mime_type)
                 intent_string = None
@@ -203,13 +209,16 @@ def _embed_images_to_bq(
                 else:
                     intent_string = caption
                     embedding = _embed_text_sdk(caption)
-            return [(did, url, intent_string, embedding) for did in url_to_datasets[url]]
+            return [(did, item_text, intent_string, embedding) for did in url_to_datasets[item_text]]
         except Exception as e:
-            print(f"⚠️ Failed to embed image {url[:80]}: {e}")
+            print(f"⚠️ Failed to embed image {download_url[:80]}: {e}")
             return []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = {executor.submit(_process_url, url): url for url in url_to_datasets}
+        futures = {
+            executor.submit(_process_url, item_text, item_to_download[item_text]): item_text
+            for item_text in url_to_datasets
+        }
         for future in concurrent.futures.as_completed(futures):
             results = future.result()
             if results:
