@@ -82,10 +82,24 @@ Note: For text-to-image gap analysis (primary use case), text dataset items are 
 - `DatasetDetailPage.jsx`: `isImageUrl` helper + image-aware custom query result cells (thumbnails for image URL values)
 - Phase 4b (deferred): Gemini visual analysis in chat (pass image bytes to Gemini chat)
 
-### Phase 5: Google Drive OAuth ⬜ TODO
-- [ ] Extend OAuth flow with Drive read scope
-- [ ] Drive folder listing API
-- [ ] Frontend: folder URL/ID input in NewDatasetModal
+### Phase 5: Google Drive OAuth ✅ DEPLOYED (commit 31474f1)
+- `backend/routers/drive_auth.py`: Full OAuth flow with PKCE (separate endpoint prefix `/api/auth/google-drive`)
+  - `GET /status` — Drive connection status (checks Firestore `settings/drive_oauth`)
+  - `GET /start` — Generates auth URL with `drive.readonly` scope
+  - `GET /callback` — Exchanges code, stores refresh_token in Firestore, redirects to `/oauth/callback?flow=drive`
+  - `DELETE /disconnect` — Removes Drive credentials
+  - `GET /list-folder?folder_url=...` — Lists image files in a Drive folder
+- Token refresh via same client_id/client_secret as Google Ads (from google-ads.yaml)
+- Drive redirect URI auto-derived from google-ads redirect URI, configurable via `config.yaml` `oauth.drive_redirect_uri`
+- `_ingest_google_drive_images()` in `datasets.py`: lists Drive folder → stores Drive public download URLs
+- `NewDatasetModal.jsx`: 🖼️ Google Drive type with connection status badge + "Connect Drive" button + folder URL input
+- `OAuthCallbackPage.jsx`: now passes `flow` in postMessage so Drive popup closure is handled correctly
+
+**Required setup before Drive works:**
+1. Go to Google Cloud Console → OAuth client `759167631809-...` → Add Authorized Redirect URI:
+   `https://smart-engine-727077869999.us-central1.run.app/api/auth/google-drive/callback`
+2. Enable Google Drive API in the project (APIs & Services → Enable APIs)
+3. Share the Drive folder as "Anyone with the link can view" before creating a dataset from it
 
 ---
 
