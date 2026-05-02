@@ -57,34 +57,30 @@ Note: For text-to-image gap analysis (primary use case), text dataset items are 
 
 ## Implementation Phases
 
-### Phase 1: gemini-embedding-2 Migration ⬜ IN PROGRESS
-- [ ] Update BQ ML `text-embeddings` model endpoint → `gemini-embedding-2`
-- [ ] Update `_EMB_OPTS`: remove `task_type`, set `output_dimensionality=768`, add task prefix to content
-- [ ] Wipe `dataset_embeddings` table (BQ DELETE)
-- [ ] Drop and recreate vector index (IVF, 768 dims)
-- [ ] Update `config.yaml` with embedding model name
-- [ ] Update Terraform `bigquery.tf` schema if needed
-- [ ] Deploy and verify
+### Phase 1: gemini-embedding-2 Migration ✅ DEPLOYED (commit f09811a)
+- BQ ML model switched from `text-embedding-005` → `gemini-embedding-2` (CREATE OR REPLACE)
+- `_EMB_OPTS`: removed `task_type`, `output_dimensionality=768`, content prefixed with task instruction
+- One-time migration: wipes `dataset_embeddings` + drops old vector index (Firestore flag gated)
+- Startup tasks consolidated to sequential thread (model → migration → index → defaults → resume jobs)
 
-### Phase 2: GCS + Image Dataset Types ⬜ TODO
-- [ ] Terraform: GCS bucket `smart-engine-images` + IAM
-- [ ] Add `image_url` column to `dataset_items` (BQ schema update)
-- [ ] Backend `datasets.py`: `image_urls` type (paste list) and `image_google_drive` type
-- [ ] Image ingestion: download → GCS upload → store GCS path
-- [ ] Frontend `NewDatasetModal.jsx`: two new image types
-- [ ] `DatasetDetailPage.jsx`: thumbnail grid/table for image datasets
+### Phase 2: Image Dataset Types ✅ DEPLOYED (commit b518dc1)
+- `image_url` column added to `dataset_items` via `ALTER TABLE IF NOT EXISTS` on startup
+- `image_urls` dataset type: URL list ingestion, validates extensions, stores item_text=image_url=URL
+- `image_google_drive`: registered type (Drive integration deferred to Phase 5)
+- `NewDatasetModal.jsx`: Image URLs type with textarea + format hint
+- `DatasetDetailPage.jsx`: `ImageThumbnail` component, auto-fill thumbnail grid for image types
 
-### Phase 3: Image Embedding Pipeline ⬜ TODO
-- [ ] Python SDK image embedding function (Gemini API, not BQ ML)
-- [ ] Two embedding modes: `direct_multimodal` and `caption_based`
-- [ ] Integrate into `bq_ml.py` `run_gap_analysis_pipeline()`
-- [ ] `NewGapAnalysisModal.jsx`: embedding mode selector for image datasets
-- [ ] `GapAnalysisDetailPage.jsx`: image thumbnails in results
+### Phase 3: Image Embedding Pipeline ✅ DEPLOYED (commit 678ade9)
+- `_download_image()`, `_embed_image_direct_sdk()`, `_generate_image_caption_sdk()`, `_embed_text_sdk()`, `_normalize_intent_sdk()` added to `bq_ml.py`
+- `_embed_images_to_bq()`: concurrent embed+cache with ThreadPoolExecutor (4 workers), deduplicates by URL
+- `run_gap_analysis_pipeline()`: extended for all 4 source/target combinations (text↔text, image→text, text→image, image→image)
+- `GapAnalysisCreate.image_embedding_mode`: "direct" or "caption", wired through to pipeline
+- `NewGapAnalysisModal.jsx`: image embedding mode selector (appears when image dataset selected)
 
-### Phase 4: Chat + UI Integration ⬜ TODO
-- [ ] `ChatPanel.jsx`: render inline image thumbnails from URLs
-- [ ] Chat agent: pass image parts to Gemini for visual analysis
-- [ ] Settings: image-specific chat prompt defaults
+### Phase 4: Chat + UI Integration ✅ DEPLOYED (commit 64a5857)
+- `GapResultsTable.jsx`: `isImageUrl()` + `ItemCell` component — renders 48px thumbnails for image URL source/target items, with broken image fallback
+- `DatasetDetailPage.jsx`: `isImageUrl` helper + image-aware custom query result cells (thumbnails for image URL values)
+- Phase 4b (deferred): Gemini visual analysis in chat (pass image bytes to Gemini chat)
 
 ### Phase 5: Google Drive OAuth ⬜ TODO
 - [ ] Extend OAuth flow with Drive read scope
