@@ -15,16 +15,17 @@ export default function OAuthCallbackPage() {
   useEffect(() => {
     const result = searchParams.get('result') || 'error'
     const reason = searchParams.get('reason') || ''
+    const flow = searchParams.get('flow') || 'google-ads'
 
     if (result === 'success') {
-      setStatus('Connected! Closing…')
+      setStatus(`Connected! Closing…`)
     } else {
       setStatus(`Authorization failed${reason ? `: ${reason}` : ''}. Closing…`)
     }
 
-    // Notify the parent window
+    // Notify the parent window — include flow so Drive vs Ads can be distinguished
     if (window.opener) {
-      window.opener.postMessage({ type: 'oauth_complete', result, reason }, '*')
+      window.opener.postMessage({ type: 'oauth_complete', result, reason, flow }, '*')
     }
 
     // Close the popup after a brief delay so the user sees the status

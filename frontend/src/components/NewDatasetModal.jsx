@@ -10,6 +10,7 @@ const TYPES = [
   { value: 'google_ads_landing_pages', label: 'Landing Pages (URLs)', needsAds: true },
   { value: 'text_list', label: 'Text List (manual)', needsAds: false },
   { value: 'image_urls', label: '🖼️ Image URLs', needsAds: false },
+  { value: 'image_google_drive', label: '🖼️ Google Drive', needsAds: false },
 ]
 
 const LP_URL_SOURCES = [
@@ -28,11 +29,13 @@ export default function NewDatasetModal({ onClose, onCreated }) {
   const [type, setType] = useState('text_list')
   const [urls, setUrls] = useState('')
   const [imageUrls, setImageUrls] = useState('')
+  const [driveFolder, setDriveFolder] = useState('')
   const [textItems, setTextItems] = useState('')
   const [accounts, setAccounts] = useState([])
   const [selectedAccounts, setSelectedAccounts] = useState([])
   const [accountsLoading, setAccountsLoading] = useState(false)
   const [lpSources, setLpSources] = useState(DEFAULT_LP_SOURCES)
+  const [driveConnected, setDriveConnected] = useState(null) // null = loading, true/false
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState(null)
 
@@ -42,6 +45,7 @@ export default function NewDatasetModal({ onClose, onCreated }) {
   const isKeywordsUrl = type === 'google_ads_keywords'
   const isTextList = type === 'text_list'
   const isImageUrls = type === 'image_urls'
+  const isGoogleDrive = type === 'image_google_drive'
 
   useEffect(() => {
     if (!needsAds) return
@@ -54,6 +58,36 @@ export default function NewDatasetModal({ onClose, onCreated }) {
       .catch(() => {})
       .finally(() => setAccountsLoading(false))
   }, [needsAds])
+
+  // Check Drive connection status when Drive type is selected
+  useEffect(() => {
+    if (!isGoogleDrive) return
+    setDriveConnected(null)
+    fetch(`${API_BASE}/api/auth/google-drive/status`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setDriveConnected(data?.connected ?? false))
+      .catch(() => setDriveConnected(false))
+  }, [isGoogleDrive])
+
+  const handleConnectDrive = () => {
+    fetch(`${API_BASE}/api/auth/google-drive/start`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.auth_url) {
+          const popup = window.open(data.auth_url, 'drive-auth', 'width=600,height=700')
+          const handler = (e) => {
+            if (e.data?.result === 'success' && e.data?.flow === 'drive') {
+              setDriveConnected(true)
+              window.removeEventListener('message', handler)
+            }
+          }
+          window.addEventListener('message', handler)
+        } else {
+          setError(data.error || 'Could not start Drive authorization')
+        }
+      })
+      .catch(() => setError('Network error connecting to Google Drive'))
+  }
 
   const toggleAccount = (id) => {
     setSelectedAccounts(prev =>
@@ -73,6 +107,8 @@ export default function NewDatasetModal({ onClose, onCreated }) {
     if (isKeywordsUrl && !urls.trim()) { setError('Please enter at least one URL'); return }
     if (isLpType && lpSources.length === 0) { setError('Select at least one URL source'); return }
     if (isImageUrls && !imageUrls.trim()) { setError('Please enter at least one image URL'); return }
+    if (isGoogleDrive && !driveFolder.trim()) { setError('Please enter a Google Drive folder URL or ID'); return }
+    if (isGoogleDrive && !driveConnected) { setError('Please connect Google Drive first'); return }
 
     setCreating(true)
     setError(null)
@@ -94,6 +130,10 @@ export default function NewDatasetModal({ onClose, onCreated }) {
     } else if (isImageUrls) {
       body.source_config = {
         urls: imageUrls.split('\n').map(s => s.trim()).filter(Boolean),
+      }
+    } else if (isGoogleDrive) {
+      body.source_config = {
+        folder_url: driveFolder.trim(),
       }
     } else if (needsAds) {
       body.source_config = { account_ids: selectedAccounts }
@@ -223,6 +263,48 @@ export default function NewDatasetModal({ onClose, onCreated }) {
               <p className="text-xs text-gray-400 mt-1">
                 Supports JPG, PNG, WebP, GIF, SVG, AVIF, and CDN URLs without extensions.
               </p>
+            </div>
+          )}
+
+          {/* Google Drive input */}
+          {isGoogleDrive && (
+            <div className="space-y-3">
+              {/* Drive connection status */}
+              <div className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
+                driveConnected === null ? 'bg-gray-50 text-gray-400' :
+                driveConnected ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+              }`}>
+                <span>
+                  {driveConnected === null ? '⏳ Checking Drive connection…' :
+                   driveConnected ? '✅ Google Drive connected' : '⚠️ Google Drive not connected'}
+                </span>
+                {driveConnected === false && (
+                  <button
+                    type="button"
+                    onClick={handleConnectDrive}
+                    className="ml-3 px-3 py-1 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700"
+                  >
+                    Connect Drive
+                  </button>
+                )}
+              </div>
+
+              {/* Folder URL input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Drive Folder URL or ID
+                </label>
+                <input
+                  type="text"
+                  value={driveFolder}
+                  onChange={e => setDriveFolder(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/1ABC... or folder ID"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  The folder must be shared as <strong>"Anyone with the link can view"</strong> for images to be accessible.
+                </p>
+              </div>
             </div>
           )}
 

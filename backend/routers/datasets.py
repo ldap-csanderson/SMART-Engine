@@ -781,6 +781,69 @@ def _ingest_google_ads_landing_pages(dataset_id: str, source_config: Dict):
         _mark_failed(dataset_id, str(e))
 
 
+def _ingest_google_drive_images(dataset_id: str, source_config: Dict):
+    """Background: list and store image files from a Google Drive folder.
+
+    Requires the folder to be shared as 'Anyone with the link can view'.
+    Stores Drive direct download URLs as item_text and image_url.
+    """
+    import re
+    from routers.drive_auth import list_drive_folder_images
+
+    folder_url = source_config.get("folder_url", "").strip()
+    if not folder_url:
+        _mark_failed(dataset_id, "folder_url is required for Google Drive image datasets")
+        return
+
+    # Extract folder ID from URL or use as-is
+    folder_id = folder_url
+    if "drive.google.com" in folder_id:
+        m = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_id)
+        if m:
+            folder_id = m.group(1)
+        else:
+            m = re.search(r'id=([a-zA-Z0-9_-]+)', folder_id)
+            if m:
+                folder_id = m.group(1)
+
+    total = 0
+    try:
+        files = list_drive_folder_images(folder_id)
+        if not files:
+            db.collection("datasets").document(dataset_id).update({
+                "status": "completed",
+                "item_count": 0,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            })
+            print(f"⚠️ Dataset {dataset_id}: no image files found in Drive folder {folder_id}")
+            return
+
+        batch: List[Dict] = []
+        for f in files:
+            file_id = f["id"]
+            # Public download URL — works when folder is "Anyone with link can view"
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            batch.append({"item_text": download_url, "image_url": download_url})
+            if len(batch) >= _INGEST_BATCH:
+                _insert_image_items_to_bq(dataset_id, batch)
+                total += len(batch)
+                batch = []
+        if batch:
+            _insert_image_items_to_bq(dataset_id, batch)
+            total += len(batch)
+
+        count = _count_distinct_items(dataset_id)
+        db.collection("datasets").document(dataset_id).update({
+            "status": "completed",
+            "item_count": count,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+        print(f"✅ Dataset {dataset_id} (image_google_drive) completed — {count} images ({total} raw)")
+    except Exception as e:
+        print(f"❌ Ingestion failed for dataset {dataset_id}: {e}")
+        _mark_failed(dataset_id, str(e))
+
+
 def _ingest_image_urls(dataset_id: str, source_config: Dict):
     """Background: validate and store image URLs as dataset items.
 
@@ -1031,7 +1094,10 @@ def create_dataset(payload: DatasetCreate, background_tasks: BackgroundTasks):
             raise HTTPException(400, "source_config.urls is required and must not be empty for image_urls datasets")
         background_tasks.add_task(_ingest_image_urls, dataset_id, {"urls": urls})
     elif payload.type == "image_google_drive":
-        _mark_failed(dataset_id, "Google Drive integration coming soon — use Image URLs type for now")
+        folder_url = source_config.get("folder_url", "").strip()
+        if not folder_url:
+            raise HTTPException(400, "source_config.folder_url is required for image_google_drive datasets")
+        background_tasks.add_task(_ingest_google_drive_images, dataset_id, {"folder_url": folder_url})
 
     doc = db.collection("datasets").document(dataset_id).get().to_dict()
     return Dataset(
