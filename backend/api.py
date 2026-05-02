@@ -8,7 +8,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from db import ga_auth_manager, bq_client, db, config
-from bq_ml import create_models_if_not_exist, create_vector_index_if_not_exist
+from bq_ml import (
+    create_models_if_not_exist,
+    create_vector_index_if_not_exist,
+    migrate_to_gemini_embedding_2,
+)
 from routers.settings import _ensure_defaults
 from routers import datasets, dataset_groups, filters, gap_analysis, settings, filter_executions, auth
 from routers.chat import dataset_chat_router, gap_chat_router
@@ -16,18 +20,30 @@ from routers.filter_executions import resume_stuck_filter_executions
 from routers.datasets import resume_stuck_datasets
 
 
+def _startup_tasks():
+    """Run all startup tasks sequentially in a single background thread.
+
+    Order matters:
+    1. Create/update BQ ML models (ensures gemini-embedding-2 endpoint is set)
+    2. Run one-time embedding migration (wipe old cache, drop old vector index)
+    3. Create vector index (rebuilds after migration drops it)
+    4. Ensure Firestore setting defaults
+    5. Resume any interrupted background jobs
+    """
+    create_models_if_not_exist()
+    migrate_to_gemini_embedding_2()
+    create_vector_index_if_not_exist()
+    _ensure_defaults()
+    resume_stuck_filter_executions()
+    resume_stuck_datasets()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run all startup tasks in background threads so startup doesn't block or crash
-    threading.Thread(target=create_models_if_not_exist, daemon=True).start()
-    # Ensure a persistent vector index exists on dataset_embeddings so VECTOR_SEARCH
-    # doesn't hit BQ on-demand shuffle memory limits for large tables (>10M rows).
-    threading.Thread(target=create_vector_index_if_not_exist, daemon=True).start()
-    threading.Thread(target=_ensure_defaults, daemon=True).start()
-    # Resume any filter executions that were interrupted by a previous deploy/crash
-    threading.Thread(target=resume_stuck_filter_executions, daemon=True).start()
-    # Mark any datasets stuck in 'processing' as failed (handles container crashes)
-    threading.Thread(target=resume_stuck_datasets, daemon=True).start()
+    # Run all startup tasks in a single background thread to preserve ordering.
+    # Previously separate threads caused race conditions between model creation
+    # and the migration step.
+    threading.Thread(target=_startup_tasks, daemon=True).start()
     yield
 
 

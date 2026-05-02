@@ -50,7 +50,7 @@ def run_bq_scalar(sql: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Startup: create BQ ML models if not present
+# Startup: create BQ ML models if not present, migrate embeddings model
 # ---------------------------------------------------------------------------
 
 def create_models_if_not_exist():
@@ -64,14 +64,74 @@ def create_models_if_not_exist():
                 OPTIONS (ENDPOINT = 'gemini-2.5-flash')""",
             f"CREATE MODEL IF NOT EXISTS {MODEL_GEMINI}",
         )
+        # Use CREATE OR REPLACE to ensure the endpoint is updated to gemini-embedding-2.
+        # The old text-embedding-005 model is incompatible with gemini-embedding-2
+        # embeddings (different dimensionality and embedding space), so we always
+        # replace to guarantee the correct model is in use.
         run_bq(
-            f"""CREATE MODEL IF NOT EXISTS {_m(MODEL_EMBEDDINGS)}
+            f"""CREATE OR REPLACE MODEL {_m(MODEL_EMBEDDINGS)}
                 REMOTE WITH CONNECTION {_conn()}
-                OPTIONS (ENDPOINT = 'text-embedding-005')""",
-            f"CREATE MODEL IF NOT EXISTS {MODEL_EMBEDDINGS}",
+                OPTIONS (ENDPOINT = 'gemini-embedding-2')""",
+            f"CREATE OR REPLACE MODEL {MODEL_EMBEDDINGS} (gemini-embedding-2)",
         )
     except Exception as e:
         print(f"⚠️ Model creation encountered an error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# One-time migration: wipe dataset_embeddings cache + rebuild vector index
+# ---------------------------------------------------------------------------
+
+def migrate_to_gemini_embedding_2():
+    """One-time migration to gemini-embedding-2.
+
+    Checks a Firestore flag settings/migrations.embedding_v2_done.
+    If not set, wipes the dataset_embeddings table (embeddings from the old
+    text-embedding-005 model are incompatible with gemini-embedding-2) and
+    drops the old vector index so it will be rebuilt at the correct 768-dim
+    size. Sets the flag when complete so this only runs once.
+    """
+    if bq_client is None or firestore_db is None:
+        print("⚠️ BQ/Firestore not available — skipping embedding migration")
+        return
+
+    try:
+        doc = firestore_db.collection("settings").document("migrations").get()
+        if doc.exists and doc.to_dict().get("embedding_v2_done"):
+            print("✅ Embedding migration to gemini-embedding-2 already complete")
+            return
+    except Exception as e:
+        print(f"⚠️ Could not check migration flag: {e}")
+        return
+
+    print("🔄 Migrating to gemini-embedding-2: wiping cached embeddings...")
+
+    try:
+        # Wipe all cached embeddings (incompatible with new model)
+        run_bq(
+            f"DELETE FROM {_t(T_DATASET_EMBEDDINGS)} WHERE TRUE",
+            "Wipe dataset_embeddings cache (gemini-embedding-2 migration)",
+        )
+
+        # Drop old vector index (was built on 512-dim text-embedding-005 vectors)
+        try:
+            run_bq(
+                f"""DROP VECTOR INDEX IF EXISTS idx_dataset_embeddings_embedding
+                    ON {_t(T_DATASET_EMBEDDINGS)}""",
+                "Drop old vector index",
+            )
+        except Exception as e:
+            print(f"⚠️ Could not drop old vector index (may not exist): {e}")
+
+        # Mark migration complete in Firestore
+        firestore_db.collection("settings").document("migrations").set(
+            {"embedding_v2_done": True},
+            merge=True,
+        )
+        print("✅ Embedding migration complete — cache wiped, index dropped, will be rebuilt")
+
+    except Exception as e:
+        print(f"❌ Embedding migration error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +164,7 @@ def create_vector_index_if_not_exist():
     (>10M rows) to avoid BQ shuffle memory limits on on-demand pricing.
 
     num_lists=2000 is appropriate for ~16M rows (sqrt(16M) ≈ 4000, we use half).
+    Embeddings are 768-dimensional (gemini-embedding-2 with output_dimensionality=768).
     """
     if bq_client is None:
         print("⚠️ BQ client not available — skipping vector index creation")
@@ -245,7 +306,14 @@ _PARSE_INTENT = r"""JSON_VALUE(
   )"""
 
 _LLM_OPTS = "STRUCT(250 AS max_output_tokens, 0.2 AS temperature, TRUE AS flatten_json_output)"
-_EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 'SEMANTIC_SIMILARITY' AS task_type, 512 AS output_dimensionality)"
+
+# gemini-embedding-2 options: no task_type parameter (use prompt prefix instead),
+# 768 dims for efficient storage and fast vector search at scale.
+_EMB_OPTS = "STRUCT(TRUE AS flatten_json_output, 768 AS output_dimensionality)"
+
+# Task instruction prefix for gemini-embedding-2 (prepended to content in SQL).
+# gemini-embedding-2 requires task instructions in the prompt text, not via task_type parameter.
+_EMB_TASK_PREFIX = "task: sentence similarity | query: "
 
 # Special prompt_hash used when intent normalization is disabled (items embedded directly).
 _DIRECT_PROMPT_HASH = "__direct__"
@@ -313,14 +381,15 @@ def run_gap_analysis_pipeline(
             SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
         """, "Step 1: source item intents")
 
-        # Step 2: source item embeddings (embed intent_string)
+        # Step 2: source item embeddings (embed intent_string with task prefix)
         run_bq(f"""
             CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
             SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
             FROM ML.GENERATE_EMBEDDING(
               MODEL {_m(MODEL_EMBEDDINGS)},
               (
-                SELECT DISTINCT item_text, intent_string, intent_string AS content
+                SELECT DISTINCT item_text, intent_string,
+                  CONCAT('{_EMB_TASK_PREFIX}', intent_string) AS content
                 FROM {_t(tmp_src_intent)}
                 WHERE intent_string IS NOT NULL
               ),
@@ -365,7 +434,7 @@ def run_gap_analysis_pipeline(
                 SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
             """, "Step 3b: target item intents for uncached items")
 
-            # Step 3c: insert new embeddings into cache (intent_string as content)
+            # Step 3c: insert new embeddings into cache (intent_string as content, with task prefix)
             for did in target_dataset_ids:
                 run_bq(f"""
                     INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
@@ -376,7 +445,8 @@ def run_gap_analysis_pipeline(
                     FROM ML.GENERATE_EMBEDDING(
                       MODEL {_m(MODEL_EMBEDDINGS)},
                       (
-                        SELECT DISTINCT t.item_text, t.intent_string, t.intent_string AS content
+                        SELECT DISTINCT t.item_text, t.intent_string,
+                          CONCAT('{_EMB_TASK_PREFIX}', t.intent_string) AS content
                         FROM {_t(tmp_tgt_intent)} t
                         INNER JOIN {_t(T_DATASET_ITEMS)} di
                           ON t.item_text = di.item_text AND di.dataset_id = '{did}'
@@ -396,14 +466,15 @@ def run_gap_analysis_pipeline(
         # Target embeddings are cached under _DIRECT_PROMPT_HASH so repeated runs reuse the cache.
         source_ph = target_ph = _DIRECT_PROMPT_HASH
 
-        # Step 2 (direct): embed source item_text directly (no intent step)
+        # Step 2 (direct): embed source item_text directly (no intent step), with task prefix
         run_bq(f"""
             CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
             SELECT item_text, CAST(NULL AS STRING) AS intent_string, ml_generate_embedding_result AS embedding
             FROM ML.GENERATE_EMBEDDING(
               MODEL {_m(MODEL_EMBEDDINGS)},
               (
-                SELECT DISTINCT item_text, item_text AS content
+                SELECT DISTINCT item_text,
+                  CONCAT('{_EMB_TASK_PREFIX}', item_text) AS content
                 FROM {_t(T_DATASET_ITEMS)}
                 WHERE dataset_id IN ({source_ids_sql})
                   {search_vol_filter}
@@ -426,7 +497,7 @@ def run_gap_analysis_pipeline(
         print(f"📊 Uncached target items (direct): {uncached}")
 
         if uncached > 0:
-            # Step 3b (direct): embed target item_text directly and cache
+            # Step 3b (direct): embed target item_text directly and cache (with task prefix)
             for did in target_dataset_ids:
                 run_bq(f"""
                     INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
@@ -439,7 +510,8 @@ def run_gap_analysis_pipeline(
                     FROM ML.GENERATE_EMBEDDING(
                       MODEL {_m(MODEL_EMBEDDINGS)},
                       (
-                        SELECT DISTINCT di.item_text, di.item_text AS content
+                        SELECT DISTINCT di.item_text,
+                          CONCAT('{_EMB_TASK_PREFIX}', di.item_text) AS content
                         FROM {_t(T_DATASET_ITEMS)} di
                         LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
                           ON di.item_text = de.item_text
