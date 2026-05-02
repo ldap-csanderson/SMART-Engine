@@ -7,7 +7,10 @@ const TYPE_LABELS = {
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',
   google_ads_keyword_planner: 'Keyword Planner (Account)',
+  google_ads_landing_pages: 'Landing Pages',
   text_list: 'Text List',
+  image_urls: '🖼️ Image URLs',
+  image_google_drive: '🖼️ Google Drive Images',
 }
 
 export default function NewDatasetGroupModal({ onClose, onCreated }) {
@@ -69,7 +72,7 @@ export default function NewDatasetGroupModal({ onClose, onCreated }) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="e.g. All Ad Copy"
+              placeholder="e.g. My Dataset Group"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>

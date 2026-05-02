@@ -9,7 +9,10 @@ const TYPE_LABELS = {
   google_ads_ad_copy: 'Ad Copy',
   google_ads_search_terms: 'Search Terms',
   google_ads_keyword_planner: 'Keyword Planner (Account)',
+  google_ads_landing_pages: 'Landing Pages',
   text_list: 'Text List',
+  image_urls: '🖼️ Image URLs',
+  image_google_drive: '🖼️ Google Drive Images',
 }
 
 const TYPE_COLORS = {
@@ -18,7 +21,10 @@ const TYPE_COLORS = {
   google_ads_ad_copy: 'bg-purple-100 text-purple-800',
   google_ads_search_terms: 'bg-green-100 text-green-800',
   google_ads_keyword_planner: 'bg-cyan-100 text-cyan-800',
+  google_ads_landing_pages: 'bg-teal-100 text-teal-800',
   text_list: 'bg-gray-100 text-gray-800',
+  image_urls: 'bg-pink-100 text-pink-800',
+  image_google_drive: 'bg-pink-100 text-pink-800',
 }
 
 const STATUS_COLORS = {

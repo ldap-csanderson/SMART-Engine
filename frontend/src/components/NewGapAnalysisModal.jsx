@@ -185,7 +185,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                placeholder="e.g. Q1 Search Terms vs Ad Copy"
+                placeholder="e.g. Search Terms vs Ad Copy"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 disabled={estimating}
               />
