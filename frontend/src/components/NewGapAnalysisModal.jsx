@@ -3,6 +3,7 @@ import API_BASE from '../config'
 import CostEstimateBox from './CostEstimateBox'
 
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
+const IMAGE_TYPES = new Set(['image_urls', 'image_google_drive'])
 
 const TYPE_LABELS = {
   google_ads_account_keywords: 'Account Keywords',
@@ -11,6 +12,8 @@ const TYPE_LABELS = {
   google_ads_search_terms: 'Search Terms',
   google_ads_keyword_planner: 'Keyword Planner (Account)',
   text_list: 'Text List',
+  image_urls: '🖼️ Image URLs',
+  image_google_drive: '🖼️ Google Drive Images',
 }
 
 export default function NewGapAnalysisModal({ onClose, onCreated }) {
@@ -23,6 +26,9 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   const [targetId, setTargetId] = useState('')
   const [minSearches, setMinSearches] = useState(1000)
   const [useIntentNormalization, setUseIntentNormalization] = useState(false)
+
+  // Image embedding
+  const [imageEmbeddingMode, setImageEmbeddingMode] = useState('direct') // 'direct' | 'caption'
 
   // Advanced
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -47,9 +53,13 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
   }, [])
 
   const sourceDataset = sourceMode === 'dataset' ? datasets.find(d => d.dataset_id === sourceId) : null
+  const targetDataset = targetMode === 'dataset' ? datasets.find(d => d.dataset_id === targetId) : null
   const showSearchVolume = sourceMode === 'group'
     ? !!sourceId
     : (sourceDataset && SEARCH_VOLUME_TYPES.has(sourceDataset.type))
+  const sourceIsImage = sourceDataset && IMAGE_TYPES.has(sourceDataset.type)
+  const targetIsImage = targetDataset && IMAGE_TYPES.has(targetDataset.type)
+  const hasImageDataset = sourceIsImage || targetIsImage
 
   const handleEstimate = async (e) => {
     e.preventDefault()
@@ -98,6 +108,7 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
           target_is_group: targetMode === 'group',
           min_monthly_searches: showSearchVolume ? minSearches : 0,
           use_intent_normalization: useIntentNormalization,
+          image_embedding_mode: imageEmbeddingMode,
           top_k: topK,
         }),
       })
@@ -295,6 +306,46 @@ export default function NewGapAnalysisModal({ onClose, onCreated }) {
                 Use an LLM to convert each item into a normalized intent statement before comparison. Improves cross-format matching (e.g. keywords vs ad copy) but adds LLM cost.
               </p>
             </div>
+
+            {/* Image embedding mode — shown only when an image dataset is selected */}
+            {hasImageDataset && (
+              <div className="py-2 border-t border-gray-100">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  🖼️ Image Embedding Mode
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setImageEmbeddingMode('direct')}
+                    disabled={estimating}
+                    className={`px-3 py-2 text-xs rounded-lg border text-left transition-colors ${
+                      imageEmbeddingMode === 'direct'
+                        ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-medium'
+                        : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    Direct Multimodal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageEmbeddingMode('caption')}
+                    disabled={estimating}
+                    className={`px-3 py-2 text-xs rounded-lg border text-left transition-colors ${
+                      imageEmbeddingMode === 'caption'
+                        ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-medium'
+                        : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    Caption-Based
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  {imageEmbeddingMode === 'direct'
+                    ? 'Embed image pixels directly using the multimodal embedding model. Fast and captures visual similarity.'
+                    : 'Generate a detailed text description of each image first, then embed the description. Better for semantic/conceptual matching.'}
+                </p>
+              </div>
+            )}
 
             {/* Advanced section */}
             <div className="border-t border-gray-100">

@@ -25,6 +25,7 @@ class GapAnalysisCreate(BaseModel):
     target_is_group: bool = False
     min_monthly_searches: int = 1000
     use_intent_normalization: bool = False
+    image_embedding_mode: str = "direct"  # "direct" or "caption" — used when source/target is an image dataset
     top_k: int = 10
 
 
@@ -111,10 +112,11 @@ def _run_analysis_background(
     target_dataset_type: str,
     min_monthly_searches: int = 1000,
     use_intent_normalization: bool = False,
+    image_embedding_mode: str = "direct",
     top_k: int = 10,
 ):
     """Background task: run the full gap analysis pipeline."""
-    print(f"🔄 Gap analysis {analysis_id} started (intent_normalization={use_intent_normalization}, top_k={top_k})")
+    print(f"🔄 Gap analysis {analysis_id} started (intent_normalization={use_intent_normalization}, image_mode={image_embedding_mode}, top_k={top_k})")
     try:
         # Pre-count source items
         if bq_client:
@@ -147,8 +149,10 @@ def _run_analysis_background(
             source_prompt=source_prompt,
             target_prompt=target_prompt,
             source_dataset_type=source_dataset_type,
+            target_dataset_type=target_dataset_type,
             min_monthly_searches=min_monthly_searches,
             use_intent_normalization=use_intent_normalization,
+            image_embedding_mode=image_embedding_mode,
             top_k=top_k,
         )
         db.collection("gap_analyses").document(analysis_id).update({
@@ -285,6 +289,7 @@ def create_gap_analysis(payload: GapAnalysisCreate, background_tasks: Background
         target_dataset_type,
         payload.min_monthly_searches,
         payload.use_intent_normalization,
+        payload.image_embedding_mode,
         payload.top_k,
     )
 
