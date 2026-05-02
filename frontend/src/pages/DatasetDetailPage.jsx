@@ -20,6 +20,8 @@ const TYPE_LABELS = {
 const SEARCH_VOLUME_TYPES = new Set(['google_ads_keywords', 'google_ads_keyword_planner'])
 const URL_TYPES = new Set(['google_ads_landing_pages'])
 const IMAGE_TYPES = new Set(['image_urls', 'image_google_drive'])
+const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|avif|svg|bmp|tiff?)(\?|#|$)/i
+const isImageUrl = (str) => typeof str === 'string' && str.startsWith('http') && IMAGE_EXTS.test(str)
 
 function ImageThumbnail({ url, alt }) {
   const [broken, setBroken] = useState(false)
@@ -289,11 +291,20 @@ export default function DatasetDetailPage() {
                   <tbody className="divide-y divide-gray-50">
                     {tableItems.map((row, i) => (
                       <tr key={i} className="hover:bg-gray-50">
-                        {customQueryColumns.map(col => (
-                          <td key={col} className="px-4 py-2 text-gray-800 text-xs whitespace-pre-wrap max-w-xs truncate">
-                            {row[col] ?? '—'}
-                          </td>
-                        ))}
+                        {customQueryColumns.map(col => {
+                          const val = row[col]
+                          return (
+                            <td key={col} className="px-4 py-2 text-gray-800 text-xs max-w-xs">
+                              {isImageUrl(val) ? (
+                                <a href={val} target="_blank" rel="noopener noreferrer">
+                                  <img src={val} alt="" className="w-10 h-10 object-cover rounded border border-gray-200" onError={e => { e.target.style.display='none' }} />
+                                </a>
+                              ) : (
+                                <span className="whitespace-pre-wrap truncate">{val ?? '—'}</span>
+                              )}
+                            </td>
+                          )
+                        })}
                       </tr>
                     ))}
                   </tbody>

@@ -1,5 +1,41 @@
+import { useState } from 'react'
 import SortIcon from './SortIcon'
 import PaginationBar from './PaginationBar'
+
+const IMAGE_EXTS = /\.(jpg|jpeg|png|gif|webp|avif|svg|bmp|tiff?)(\?|#|$)/i
+
+function isImageUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  if (!str.startsWith('http')) return false
+  return IMAGE_EXTS.test(str)
+}
+
+function ItemCell({ text, subText }) {
+  const [broken, setBroken] = useState(false)
+  if (isImageUrl(text) && !broken) {
+    return (
+      <div className="flex items-center gap-2">
+        <a href={text} target="_blank" rel="noopener noreferrer">
+          <img
+            src={text}
+            alt=""
+            className="w-12 h-12 object-cover rounded border border-gray-200 shrink-0"
+            onError={() => setBroken(true)}
+          />
+        </a>
+        <span className="text-xs text-gray-400 truncate max-w-[10rem]" title={text}>
+          {text.split('/').pop() || text}
+        </span>
+      </div>
+    )
+  }
+  return (
+    <>
+      <span>{text}</span>
+      {subText && <p className="text-xs text-gray-400 font-normal mt-0.5">{subText}</p>}
+    </>
+  )
+}
 
 /**
  * GapResultsTable — sortable, paginated gap analysis results.
@@ -115,12 +151,10 @@ export default function GapResultsTable({
                       className={`${isHighlighted ? 'bg-yellow-50' : 'hover:bg-gray-50'} ${hasMultiple ? 'cursor-pointer' : ''}`}
                     >
                       <td className="px-4 py-2.5 font-medium text-gray-900">
-                        {row.keyword_text}
-                        {showIntentColumns && row.keyword_intent && (
-                          <p className="text-xs text-gray-400 font-normal mt-0.5">
-                            {row.keyword_intent}
-                          </p>
-                        )}
+                        <ItemCell
+                          text={row.keyword_text}
+                          subText={showIntentColumns ? row.keyword_intent : null}
+                        />
                       </td>
                       {showSearchVolume && (
                         <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
@@ -135,12 +169,10 @@ export default function GapResultsTable({
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-gray-500">
-                        <span>{closestMatch?.item || '—'}</span>
-                        {showIntentColumns && closestMatch?.intent && (
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {closestMatch.intent}
-                          </p>
-                        )}
+                        {closestMatch?.item
+                          ? <ItemCell text={closestMatch.item} subText={showIntentColumns ? closestMatch.intent : null} />
+                          : '—'
+                        }
                       </td>
                       {completedExecs.map((e) => {
                         const val = filterResultsMap[e.execution_id]?.[row.keyword_text]
@@ -161,13 +193,25 @@ export default function GapResultsTable({
                     {isExpanded && hasMultiple && (
                       <tr key={`${i}-exp`} className={isHighlighted ? 'bg-yellow-50' : 'bg-gray-50'}>
                         <td colSpan={colSpanCount} className="px-4 py-3">
-                          <div className="text-xs text-gray-600 space-y-1">
+                          <div className="text-xs text-gray-600 space-y-2">
                             {row.portfolio_matches.map((match, idx) => (
-                              <div key={idx} className="flex gap-3">
+                              <div key={idx} className="flex gap-3 items-center">
                                 <span className="font-mono text-gray-400 w-14 text-right shrink-0">
                                   {match.distance?.toFixed(3)}
                                 </span>
-                                <span className="text-gray-600">{match.item}</span>
+                                {isImageUrl(match.item) ? (
+                                  <div className="flex items-center gap-2">
+                                    <img
+                                      src={match.item}
+                                      alt=""
+                                      className="w-8 h-8 object-cover rounded border border-gray-200"
+                                      onError={e => { e.target.style.display = 'none' }}
+                                    />
+                                    <span className="text-gray-500 truncate max-w-xs">{match.item.split('/').pop()}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-600">{match.item}</span>
+                                )}
                               </div>
                             ))}
                           </div>
