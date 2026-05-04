@@ -1,52 +1,142 @@
 #!/bin/bash
 set -e
 
-# Configuration
-PROJECT_ID="csanderson-experimental-443821"
-REGION="us-central1"
-REPO="app"
-IMAGE_NAME="smart-engine"
+# ---------------------------------------------------------------------------
+# SMART Engine — Deployment Script
+#
+# Usage:
+#   ./deploy.sh <env-name>          Build + deploy to an existing deployment
+#   ./deploy.sh <env-name> --init   Provision infrastructure (first time only),
+#                                   then build + deploy
+#
+# env-name: name of a file in deployments/<env-name>.env
+#
+# Examples:
+#   ./deploy.sh csanderson           # deploy to csanderson-experimental-443821
+#   ./deploy.sh people               # deploy to people-gandalf
+#   ./deploy.sh myenv --init         # fresh provision + deploy for myenv
+#
+# See DEPLOY.md for full documentation.
+# ---------------------------------------------------------------------------
 
-echo "🚀 SMART Engine Deployment Script"
-echo "===================================="
-echo "Project: $PROJECT_ID"
-echo "Region: $REGION"
-echo ""
+ENV_NAME="${1:-}"
+INIT_MODE="${2:-}"
 
-# Check if gcloud is authenticated
-if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q "@"; then
-    echo "❌ Not authenticated with gcloud. Please run: gcloud auth login"
-    exit 1
+if [[ -z "$ENV_NAME" ]]; then
+  echo "❌ Usage: ./deploy.sh <env-name> [--init]"
+  echo ""
+  echo "   Available environments:"
+  for f in deployments/*.env; do
+    echo "     - $(basename "$f" .env)"
+  done
+  echo ""
+  echo "   See DEPLOY.md for instructions on adding a new environment."
+  exit 1
 fi
 
-# Set the project
-gcloud config set project $PROJECT_ID
+ENV_FILE="deployments/${ENV_NAME}.env"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "❌ Environment file not found: $ENV_FILE"
+  echo "   Create it with: PROJECT_ID and BRAND_NAME variables."
+  echo "   See DEPLOY.md for details."
+  exit 1
+fi
 
-echo "🏗️  Deploying infrastructure with Terraform..."
-cd terraform
-terraform apply -auto-approve -var="app_image=us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
-cd ..
+# Load environment config
+# shellcheck source=/dev/null
+source "$ENV_FILE"
 
+# Defaults (can be overridden in .env file)
+REGION="${REGION:-us-central1}"
+REPO="${REPO:-app}"
+IMAGE_NAME="${IMAGE_NAME:-smart-engine}"
+BRAND_NAME="${BRAND_NAME:-SMART Engine}"
+
+echo "🚀 SMART Engine Deployment"
+echo "=========================="
+echo "Environment: $ENV_NAME"
+echo "Project:     $PROJECT_ID"
+echo "Brand:       $BRAND_NAME"
+echo "Region:      $REGION"
 echo ""
-echo "📦 Building and pushing Docker image (frontend + backend)..."
+
+# Check gcloud auth
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q "@"; then
+  echo "❌ Not authenticated with gcloud. Run: gcloud auth login"
+  exit 1
+fi
+
+gcloud config set project "$PROJECT_ID"
+
+# Derive the Cloud Run URL (deterministic from project number)
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+CLOUD_RUN_URL="https://${IMAGE_NAME}-${PROJECT_NUMBER}.${REGION}.run.app"
+IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest"
+
+echo "🌐 Cloud Run URL: $CLOUD_RUN_URL"
+echo "🐳 Image:         $IMAGE_TAG"
+echo ""
+
+# ---------------------------------------------------------------------------
+# --init: Provision infrastructure with Terraform (fresh deployments only)
+# ---------------------------------------------------------------------------
+if [[ "$INIT_MODE" == "--init" ]]; then
+  echo "🏗️  Provisioning infrastructure with Terraform..."
+  echo ""
+
+  # Create GCS bucket for Terraform state (idempotent)
+  TF_STATE_BUCKET="${PROJECT_ID}-smart-engine-tfstate"
+  if ! gsutil ls -b "gs://${TF_STATE_BUCKET}" &>/dev/null; then
+    echo "  Creating Terraform state bucket: gs://${TF_STATE_BUCKET}"
+    gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${TF_STATE_BUCKET}"
+    gsutil versioning set on "gs://${TF_STATE_BUCKET}"
+  else
+    echo "  ✅ Terraform state bucket: gs://${TF_STATE_BUCKET}"
+  fi
+
+  cd terraform
+  terraform init \
+    -backend-config="bucket=${TF_STATE_BUCKET}" \
+    -backend-config="prefix=state" \
+    -reconfigure
+
+  terraform apply -auto-approve \
+    -var="project_id=${PROJECT_ID}" \
+    -var="region=${REGION}" \
+    -var="app_image=${IMAGE_TAG}"
+  cd ..
+  echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Build Docker image (with brand name injected at build time)
+# ---------------------------------------------------------------------------
+echo "📦 Building Docker image..."
 gcloud builds submit . \
-  --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest \
+  --config=cloudbuild.yaml \
+  --substitutions="_BRAND_NAME=${BRAND_NAME},_IMAGE_TAG=${IMAGE_TAG}" \
   --timeout=15m
-
 echo ""
-echo "🔄 Updating Cloud Run with new image..."
-gcloud run deploy ${IMAGE_NAME} \
-  --image ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest \
-  --region ${REGION} \
-  --project ${PROJECT_ID} \
+
+# ---------------------------------------------------------------------------
+# Deploy to Cloud Run
+# ---------------------------------------------------------------------------
+echo "🔄 Deploying to Cloud Run..."
+gcloud run deploy "${IMAGE_NAME}" \
+  --image "${IMAGE_TAG}" \
+  --region "${REGION}" \
+  --project "${PROJECT_ID}" \
+  --service-account "${IMAGE_NAME}-app@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --set-env-vars "GCP_PROJECT_ID=${PROJECT_ID},CLOUD_RUN_URL=${CLOUD_RUN_URL}" \
+  --set-secrets /secrets/google-ads.yaml=google-ads-yaml:latest \
+  --allow-unauthenticated \
+  --min-instances 1 \
+  --max-instances 1 \
+  --memory 4Gi \
+  --cpu 2 \
+  --port 8000 \
   --quiet
 
 echo ""
 echo "✅ Deployment complete!"
-echo ""
-echo "📋 Application URL:"
-cd terraform
-echo "   $(terraform output -raw app_url)"
-cd ..
-echo ""
-echo "💡 To update the application, simply run: ./deploy.sh"
+echo "📋 URL: ${CLOUD_RUN_URL}"

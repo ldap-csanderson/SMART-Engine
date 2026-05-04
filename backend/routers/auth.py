@@ -31,7 +31,7 @@ import requests as http_requests
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
 
-from db import ga_auth_manager, db, config, PROJECT_ID
+from db import ga_auth_manager, db, config, PROJECT_ID, OAUTH_REDIRECT_URI
 
 router = APIRouter(prefix="/auth/google-ads", tags=["auth"])
 
@@ -45,7 +45,7 @@ _OAUTH_SCOPE = "https://www.googleapis.com/auth/adwords"
 _STATE_TTL_MINUTES = 10
 _STATE_COLLECTION = "_oauth_state"
 
-_REDIRECT_URI = config.get("oauth", {}).get("redirect_uri", "")
+_REDIRECT_URI = OAUTH_REDIRECT_URI
 _SECRET_NAME = config.get("secrets", {}).get("google_ads_secret_name", "google-ads-yaml")
 
 

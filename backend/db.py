@@ -8,7 +8,18 @@ import google_ads_auth
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
-PROJECT_ID = config["gcp"]["project_id"]
+# ---------------------------------------------------------------------------
+# Project / region — env vars take precedence over config.yaml so that the
+# same image can be deployed to any GCP project without rebuilding.
+# ---------------------------------------------------------------------------
+
+PROJECT_ID = os.getenv("GCP_PROJECT_ID") or config["gcp"]["project_id"]
+if not PROJECT_ID:
+    raise ValueError(
+        "GCP project ID not set. Pass GCP_PROJECT_ID env var to Cloud Run "
+        "or set gcp.project_id in config.yaml."
+    )
+
 DATASET_ID = config["bigquery"]["dataset"]
 REGION = config["gcp"]["region"]
 CONNECTION_ID = config["bigquery"]["connection"]
@@ -32,6 +43,28 @@ FILTER_BATCH_SIZE = config["bigquery"].get("filter_batch_size", 500)
 
 # Dataset types that have search volume enrichment data
 SEARCH_VOLUME_TYPES = {"google_ads_keywords", "google_ads_keyword_planner"}
+
+# ---------------------------------------------------------------------------
+# OAuth redirect URIs
+# Derived from CLOUD_RUN_URL env var when set (preferred), otherwise fall back
+# to explicit OAUTH_REDIRECT_URI / DRIVE_REDIRECT_URI env vars, then config.yaml.
+# CLOUD_RUN_URL is set automatically by deploy.sh at deploy time.
+# ---------------------------------------------------------------------------
+
+_cloud_run_url = os.getenv("CLOUD_RUN_URL", "")
+_cfg_oauth = config.get("oauth", {})
+
+OAUTH_REDIRECT_URI = (
+    os.getenv("OAUTH_REDIRECT_URI")
+    or (f"{_cloud_run_url}/api/auth/google-ads/callback" if _cloud_run_url else "")
+    or _cfg_oauth.get("redirect_uri", "")
+)
+
+DRIVE_REDIRECT_URI = (
+    os.getenv("DRIVE_REDIRECT_URI")
+    or (f"{_cloud_run_url}/api/auth/google-drive/callback" if _cloud_run_url else "")
+    or _cfg_oauth.get("drive_redirect_uri", "")
+)
 
 # ---------------------------------------------------------------------------
 # Client initialization

@@ -5,6 +5,11 @@ FROM node:20-slim AS frontend-builder
 
 WORKDIR /frontend
 
+# Brand name injected at build time via deploy.sh --substitutions
+# Vite embeds VITE_* env vars into the bundle at build time.
+ARG VITE_BRAND_NAME="SMART Engine"
+ENV VITE_BRAND_NAME=$VITE_BRAND_NAME
+
 # Copy frontend package files
 COPY frontend/package*.json ./
 RUN npm ci

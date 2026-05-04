@@ -1,0 +1,18 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'VITE_BRAND_NAME=${_BRAND_NAME}'
+      - '-t'
+      - '${_IMAGE_TAG}'
+      - '.'
+
+images:
+  - '${_IMAGE_TAG}'
+
+timeout: '900s'
+
+substitutions:
+  _BRAND_NAME: 'SMART Engine'
+  _IMAGE_TAG: 'us-central1-docker.pkg.dev/PROJECT_ID/app/smart-engine:latest'

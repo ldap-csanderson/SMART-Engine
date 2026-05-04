@@ -1,0 +1,93 @@
+# SMART Engine — Cline Agent Instructions
+
+## Deployment
+
+Read **DEPLOY.md** before performing any deployment-related tasks. It is the
+authoritative guide. The instructions below are agent-specific guidance for
+*how* to operate deployments, not what the deployment system does.
+
+### Deploying an update to an existing environment
+
+```bash
+./deploy.sh <env-name>
+```
+
+Known environments: `csanderson`, `people`. Check `deployments/*.env` for others.
+
+**Never run `terraform apply` for routine deployments.** Terraform is infrastructure
+provisioning only (one-time `--init` flow). See DEPLOY.md.
+
+### Deploying to a fresh GCP project
+
+```bash
+./deploy.sh <env-name> --init
+```
+
+But first:
+1. Create `deployments/<env-name>.env` with `PROJECT_ID` and `BRAND_NAME`
+2. Complete the manual pre-deployment GCP steps in DEPLOY.md (enable APIs,
+   create secret, create Artifact Registry repo)
+3. Run `--init` from the project root
+
+### If deploy.sh fails mid-way
+
+`deploy.sh` has `set -e`. If the build step fails, the Cloud Run deploy won't run.
+Re-run `./deploy.sh <env-name>` after fixing the issue — it's idempotent.
+
+If only the Cloud Run deploy needs to be re-run (image already built):
+```bash
+gcloud run deploy smart-engine \
+  --image <IMAGE_TAG> \
+  --region us-central1 \
+  --project <PROJECT_ID> \
+  --service-account smart-engine-app@<PROJECT_ID>.iam.gserviceaccount.com \
+  --set-env-vars "GCP_PROJECT_ID=<PROJECT_ID>,CLOUD_RUN_URL=<CLOUD_RUN_URL>" \
+  --set-secrets /secrets/google-ads.yaml=google-ads-yaml:latest \
+  --allow-unauthenticated \
+  --min-instances 1 --max-instances 1 --memory 4Gi --cpu 2 --port 8000 --quiet
+```
+
+### Checking deployment status
+
+```bash
+# Get the current revision and URL:
+gcloud run services describe smart-engine --region us-central1 --project <PROJECT_ID> \
+  --format="value(status.latestReadyRevisionName,status.url)"
+
+# Check logs:
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=smart-engine" \
+  --project <PROJECT_ID> --limit 50 --format="value(textPayload)"
+```
+
+### Checking a gap analysis failure
+
+```bash
+curl -s "https://<SERVICE_URL>/api/gap-analyses/<analysis-id>" | jq '{status, error_message}'
+```
+
+To retry a failed analysis:
+```bash
+curl -s -X POST "https://<SERVICE_URL>/api/gap-analyses/<analysis-id>/retry" | jq '.status'
+```
+
+---
+
+## Project Structure Notes
+
+- `deployments/*.env` — one file per GCP deployment, committed to `main`
+- `deploy.sh` — parameterized deployment script, reads `.env` files
+- `cloudbuild.yaml` — root-level Cloud Build config with `_BRAND_NAME` substitution
+- `terraform/` — infrastructure as code; GCS backend, state isolated per project
+- `backend/db.py` — reads `GCP_PROJECT_ID` and `CLOUD_RUN_URL` env vars at startup
+- `backend/config.yaml` — generic defaults only; no project-specific values
+
+## Key Architecture Notes
+
+- **BQ ML batching**: `bq_ml.py` batches `ML.GENERATE_TEXT` (≤15K items/call) and
+  `ML.GENERATE_EMBEDDING` (≤25K items/call) to avoid BQ's 33K CPU-second limit.
+- **No deployment branches**: All environments live on `main`. Do not create or
+  maintain `deployments/*` or `deploy/*` git branches.
+- **Brand name**: Baked into Docker image at build time via `VITE_BRAND_NAME` build arg.
+  Changing it requires a redeploy.
+- **OAuth redirect URIs**: Auto-derived from `CLOUD_RUN_URL` env var. No hardcoding
+  needed in source files.

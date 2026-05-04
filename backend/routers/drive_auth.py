@@ -35,7 +35,7 @@ import requests as http_requests
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
 
-from db import ga_auth_manager, db, config, PROJECT_ID
+from db import ga_auth_manager, db, config, PROJECT_ID, DRIVE_REDIRECT_URI
 
 drive_router = APIRouter(prefix="/auth/google-drive", tags=["auth"])
 
@@ -51,19 +51,9 @@ _STATE_TTL_MINUTES = 10
 _STATE_COLLECTION = "_oauth_state_drive"
 _DRIVE_SETTINGS_DOC = "drive_oauth"
 
-# Drive uses a dedicated redirect URI — must be registered in the OAuth client
-_DRIVE_REDIRECT_URI = config.get("oauth", {}).get("drive_redirect_uri", "")
-
-# Fall back to deriving from the google-ads redirect URI if drive_redirect_uri not set
-if not _DRIVE_REDIRECT_URI:
-    _ads_redirect = config.get("oauth", {}).get("redirect_uri", "")
-    if _ads_redirect:
-        # e.g. https://service.run.app/api/auth/google-ads/callback
-        # → https://service.run.app/api/auth/google-drive/callback
-        _DRIVE_REDIRECT_URI = _ads_redirect.replace(
-            "/api/auth/google-ads/callback",
-            "/api/auth/google-drive/callback",
-        )
+# Drive redirect URI is derived from CLOUD_RUN_URL env var set by deploy.sh.
+# See db.py DRIVE_REDIRECT_URI for the resolution order.
+_DRIVE_REDIRECT_URI = DRIVE_REDIRECT_URI
 
 
 # ---------------------------------------------------------------------------

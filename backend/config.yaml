@@ -7,7 +7,9 @@ app:
 
 # Google Cloud Platform Settings
 gcp:
-  project_id: "csanderson-experimental-443821"
+  # project_id is overridden at runtime by the GCP_PROJECT_ID env var.
+  # Leave blank here; deploy.sh sets GCP_PROJECT_ID on Cloud Run.
+  project_id: ""
   region: "us-central1"
   credentials_path: "${GCP_SERVICE_ACCOUNT_KEY_PATH}"
 
@@ -36,13 +38,12 @@ google_ads:
   config_path: "../scripts/google-ads.yaml"
 
 # OAuth Settings (for in-app Google Ads re-authorization)
+# redirect_uri and drive_redirect_uri are derived at runtime from the
+# CLOUD_RUN_URL env var set by deploy.sh. These fallbacks are only used
+# for local development (set them to your ngrok or local proxy URL).
 oauth:
-  # Must be added as an Authorized Redirect URI in Google Cloud Console
-  # for OAuth client: 759167631809-1ibgmfql9fp8o6be06nub9q5pcle8117.apps.googleusercontent.com
-  redirect_uri: "https://smart-engine-xdzhjknata-uc.a.run.app/api/auth/google-ads/callback"
-  # Google Drive OAuth redirect URI — must also be registered in Google Cloud Console
-  # Also add to the OAuth client's Authorized Redirect URIs list
-  drive_redirect_uri: "https://smart-engine-727077869999.us-central1.run.app/api/auth/google-drive/callback"
+  redirect_uri: ""
+  drive_redirect_uri: ""
 
 # Google Cloud Storage — image caching bucket
 gcs:

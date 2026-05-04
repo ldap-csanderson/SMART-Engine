@@ -1,5 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 
+const BRAND_NAME = import.meta.env.VITE_BRAND_NAME || 'SMART Engine'
+
 const navItems = [
   { path: '/datasets', label: 'Datasets' },
   { path: '/dataset-groups', label: 'Dataset Groups' },
@@ -13,7 +15,7 @@ export default function Navbar() {
   return (
     <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
       <Link to="/" className="font-bold text-lg text-indigo-600 mr-4">
-        SMART Engine
+        {BRAND_NAME}
       </Link>
       {navItems.map(item => (
         <Link
