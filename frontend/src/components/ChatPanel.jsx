@@ -106,7 +106,7 @@ function QueryBlock({ sql, explanation, onApprove, onReject, status }) {
 }
 
 // ── Data Peek block ──────────────────────────────────────────────────────────
-function PeekBlock({ explanation, previewRows, onApprove, onReject, status }) {
+function PeekBlock({ explanation, previewRows, includeImages, onApprove, onReject, status }) {
   const [localRows, setLocalRows] = useState(previewRows)
   const isPending = status === 'pending', isRunning = status === 'running'
   const clamp = (v) => Math.max(1, Math.min(500, Math.round(v)))
@@ -115,8 +115,14 @@ function PeekBlock({ explanation, previewRows, onApprove, onReject, status }) {
       <div className="bg-violet-50 px-3 py-1.5 flex items-center gap-2 border-b border-violet-200">
         <span className="text-xs text-violet-700 font-semibold tracking-wide uppercase">🔍 Data Peek</span>
         <span className="text-xs bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded-full font-medium">current view</span>
+        {includeImages && <span className="text-xs bg-pink-100 text-pink-700 px-1.5 py-0.5 rounded-full font-medium">🖼️ with images</span>}
       </div>
       {explanation && <div className="px-3 py-2 text-xs text-gray-600 bg-violet-50 border-b border-violet-100 leading-relaxed">{explanation}</div>}
+      {includeImages && isPending && (
+        <div className="px-3 py-1.5 text-[11px] text-pink-700 bg-pink-50 border-b border-pink-100">
+          Images will be downloaded and sent to the model. Keep peek count low (3–10) to avoid high cost.
+        </div>
+      )}
       {(isPending || isRunning) && (
         <div className="px-3 py-2.5 border-t border-violet-100 space-y-2">
           {isPending && (
@@ -237,7 +243,7 @@ function Message({ msg, onApprove, onReject, onPeekApprove, onPeekReject, onData
         {isUser && msg.text && <p className="text-xs leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
         {!isUser && msg.text && <MarkdownText text={msg.text} />}
         {msg.sql && <QueryBlock sql={msg.sql} explanation={msg.explanation} onApprove={() => onApprove(msg.id)} onReject={() => onReject(msg.id)} status={msg.queryStatus || 'pending'} />}
-        {msg.isPeek && <PeekBlock explanation={msg.explanation} previewRows={msg.previewRows} onApprove={(rows) => onPeekApprove(msg.id, rows)} onReject={() => onPeekReject(msg.id)} status={msg.peekStatus || 'pending'} />}
+        {msg.isPeek && <PeekBlock explanation={msg.explanation} previewRows={msg.previewRows} includeImages={msg.includeImages} onApprove={(rows) => onPeekApprove(msg.id, rows)} onReject={() => onPeekReject(msg.id)} status={msg.peekStatus || 'pending'} />}
         {msg.isCreateDataset && <CreateDatasetBlock suggestedName={msg.datasetName} onApprove={(name) => onDatasetApprove(msg.id, name)} onReject={() => onDatasetReject(msg.id)} status={msg.datasetStatus || 'pending'} />}
         {msg.isToggleFilter && <ToggleFilterBlock filterName={msg.filterName} proposedMode={msg.filterMode} reason={msg.reason} onApprove={() => onToggleApprove(msg.id)} onReject={() => onToggleReject(msg.id)} status={msg.toggleStatus || 'pending'} />}
         {msg.isCreateFilter && <CreateFilterBlock filterName={msg.filterName} reason={msg.reason} onApprove={() => onFilterApprove(msg.id)} onReject={() => onFilterReject(msg.id)} status={msg.filterExecStatus || 'pending'} />}
@@ -337,7 +343,7 @@ export default function ChatPanel({
       if (data.type === 'query') {
         addMsg({ role: 'assistant', sql: data.sql, explanation: data.explanation, queryStatus: 'pending' })
       } else if (data.type === 'peek') {
-        addMsg({ role: 'assistant', isPeek: true, explanation: data.explanation, previewRows: data.preview_rows, peekStatus: 'pending' })
+        addMsg({ role: 'assistant', isPeek: true, explanation: data.explanation, previewRows: data.preview_rows, includeImages: !!data.include_images, peekStatus: 'pending' })
       } else if (data.type === 'create_dataset') {
         addMsg({ role: 'assistant', isCreateDataset: true, datasetName: data.name, datasetSql: data.sql || '', datasetStatus: 'pending' })
       } else if (data.type === 'toggle_filter' && mode === 'gap') {
@@ -408,6 +414,7 @@ export default function ChatPanel({
           columns,
           preview_rows: rows.length,
           explanation: msg.explanation,
+          include_images: !!msg.includeImages,
           history: buildHistory(),
           ...(mode === 'gap' ? { context: buildGapContext() } : {}),
         }),

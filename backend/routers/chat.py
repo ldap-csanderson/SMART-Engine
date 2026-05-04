@@ -3,7 +3,9 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import requests as _http
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from google.cloud import firestore
@@ -82,6 +84,65 @@ def _call_gemini(prompt: str, temperature: float = 0.0, max_tokens: int = 2048) 
         return response.text.strip()
     except Exception as e:
         raise HTTPException(502, f"Gemini error: {e}")
+
+
+def _call_gemini_multimodal(text_prompt: str, images: List[Tuple[bytes, str]], temperature: float = 0.2, max_tokens: int = 4096) -> str:
+    """Call Gemini with a text prompt plus raw image bytes for multimodal analysis."""
+    model = _get_agent_model()
+    client = _gemini_client()
+    try:
+        from google.genai import types as genai_types
+        parts = [genai_types.Part.from_text(text=text_prompt)]
+        for img_bytes, mime_type in images:
+            parts.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+        response = client.models.generate_content(
+            model=model,
+            contents=parts,
+            config=genai_types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
+        )
+        return response.text.strip()
+    except Exception as e:
+        raise HTTPException(502, f"Gemini multimodal error: {e}")
+
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"}
+_IMAGE_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
+
+def _is_image_url(val: str) -> bool:
+    if not val or not val.startswith("http"):
+        return False
+    lower = val.lower().split("?")[0]
+    if any(lower.endswith(ext) for ext in _IMAGE_EXTS):
+        return True
+    if "storage.googleapis.com" in lower:
+        return True
+    return False
+
+
+def _download_images_for_peek(rows: list, columns: List[str]) -> List[Tuple[bytes, str, int]]:
+    """Detect image URLs in peek rows, download them, return (bytes, mime, row_index) tuples."""
+    results = []
+    # Prefer explicit image_url column; fall back to item_text
+    url_col = "image_url" if "image_url" in columns else ("item_text" if "item_text" in columns else None)
+    if not url_col:
+        return results
+    for i, row in enumerate(rows):
+        url = row.get(url_col) or ""
+        if _is_image_url(str(url)):
+            try:
+                resp = _http.get(url, timeout=10)
+                resp.raise_for_status()
+                mime = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+                if not mime.startswith("image/"):
+                    mime = "image/jpeg"
+                results.append((resp.content, mime, i))
+            except Exception as exc:
+                print(f"⚠️ Peek image download failed for row {i} ({url}): {exc}")
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +299,10 @@ RESPONSE FORMAT (follow exactly — choose ONE):
    {{"action":"query","sql":"SELECT ...","explanation":"One sentence describing what this returns"}}
 
 2. To look at a sample of data yourself so you can analyze it and answer a question:
-   {{"action":"peek","explanation":"What I need to understand from this sample","preview_rows":N}}
+   {{"action":"peek","explanation":"What I need to understand from this sample","preview_rows":N,"include_images":false}}
    The data is pulled from the CURRENT VIEW. Do NOT write a SQL query for a peek.
    Guidelines: 5–15 rows for spot-checks, 15–50 for patterns, 50–100 for broad summaries. Never >100.
+   For IMAGE datasets (type image_urls or image_google_drive): use 3–10 rows and set include_images=true to actually see the images — images are large and expensive to pass to the model.
    The user will approve before the peek runs and can adjust the row count.
 
 3. To cut the current results into a new dataset:
@@ -277,6 +339,7 @@ class DatasetPeekRequest(BaseModel):
     columns: List[str]
     preview_rows: int
     explanation: Optional[str] = None
+    include_images: bool = False
     history: Optional[List[HistoryItem]] = None
 
 
@@ -334,7 +397,8 @@ def dataset_chat_message(dataset_id: str, payload: DatasetChatMessageRequest):
 
         elif act_type == "peek":
             preview_rows = max(1, min(int(action.get("preview_rows", 25)), 500))
-            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows}
+            include_images = bool(action.get("include_images", False))
+            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images}
 
         elif act_type == "create_dataset":
             name = action.get("name") or f"Subset from {dataset_name}"
@@ -425,7 +489,18 @@ def dataset_chat_peek(dataset_id: str, payload: DatasetPeekRequest):
         f"Assistant: [Ran peek. Here are the results:]\n{data_block}\n\n"
         f"Assistant (analysis):"
     )
-    analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+
+    if payload.include_images:
+        image_data = _download_images_for_peek(rows, col_names)
+        if image_data:
+            image_parts = [(b, m) for b, m, _ in image_data]
+            prompt += f"\n[{len(image_parts)} image(s) attached above in the order they appear in the table.]"
+            analysis = _call_gemini_multimodal(prompt, image_parts, temperature=0.2, max_tokens=4096)
+        else:
+            analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+    else:
+        analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+
     return {"type": "reply", "text": analysis, "peek_rows": preview_rows}
 
 
@@ -513,8 +588,9 @@ RESPONSE FORMAT (follow exactly — choose ONE):
    {{"action":"query","sql":"SELECT ...","explanation":"One sentence describing what this returns"}}
 
 2. To look at a sample of data yourself:
-   {{"action":"peek","explanation":"What I need to understand","preview_rows":N}}
+   {{"action":"peek","explanation":"What I need to understand","preview_rows":N,"include_images":false}}
    Data is pulled from the CURRENT VIEW (including active filter modes). Never >100 rows.
+   For IMAGE datasets or analyses with image source/target: use 3–10 rows and set include_images=true to actually see the images.
 
 3. To propose enabling or disabling a filter execution:
    {{"action":"toggle_filter","execution_id":"...","name":"...","mode":"true|false|any","reason":"..."}}
@@ -551,6 +627,7 @@ class GapPeekRequest(BaseModel):
     columns: List[str]
     preview_rows: int
     explanation: Optional[str] = None
+    include_images: bool = False
     history: Optional[List[HistoryItem]] = None
     context: Optional[Dict[str, Any]] = None
 
@@ -636,7 +713,8 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
 
         elif act_type == "peek":
             preview_rows = max(1, min(int(action.get("preview_rows", 25)), 500))
-            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows}
+            include_images = bool(action.get("include_images", False))
+            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images}
 
         elif act_type == "toggle_filter":
             mode = action.get("mode", "any")
@@ -721,7 +799,18 @@ def gap_chat_peek(analysis_id: str, payload: GapPeekRequest):
         f"Assistant: [Ran peek. Here are the results:]\n{data_block}\n\n"
         f"Assistant (analysis):"
     )
-    analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+
+    if payload.include_images:
+        image_data = _download_images_for_peek(rows, col_names)
+        if image_data:
+            image_parts = [(b, m) for b, m, _ in image_data]
+            prompt += f"\n[{len(image_parts)} image(s) attached above in the order they appear in the table.]"
+            analysis = _call_gemini_multimodal(prompt, image_parts, temperature=0.2, max_tokens=4096)
+        else:
+            analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+    else:
+        analysis = _call_gemini(prompt, temperature=0.2, max_tokens=4096)
+
     return {"type": "reply", "text": analysis, "peek_rows": preview_rows}
 
 
