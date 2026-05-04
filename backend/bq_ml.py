@@ -501,6 +501,208 @@ _EMB_TASK_PREFIX = "task: sentence similarity | query: "
 
 _DIRECT_PROMPT_HASH = "__direct__"
 
+# ---------------------------------------------------------------------------
+# Batch sizes for LLM/embedding steps to stay under BQ CPU limits.
+# On-demand pricing cap: ~33K CPU-seconds per query.
+# At ~70K items → 126K CPU-seconds, batching at 15K keeps each call ≈27K.
+# ---------------------------------------------------------------------------
+_LLM_BATCH = 15_000   # items per ML.GENERATE_TEXT call
+_EMB_BATCH = 25_000   # items per ML.GENERATE_EMBEDDING call
+
+
+def _run_llm_batched(
+    source_query: str,
+    dest_table: str,
+    batch_size: int = _LLM_BATCH,
+    description: str = "",
+) -> None:
+    """Stage prompts then run ML.GENERATE_TEXT in batches, building dest_table.
+
+    source_query must produce columns: item_text STRING, prompt STRING.
+    dest_table will be created/replaced with columns: item_text STRING, intent_string STRING.
+    """
+    staging = f"{dest_table}_pstage"
+    # Materialize with stable row numbers for deterministic BETWEEN batching
+    run_bq(f"""
+        CREATE OR REPLACE TABLE {_t(staging)} AS
+        SELECT ROW_NUMBER() OVER (ORDER BY item_text) AS rn, item_text, prompt
+        FROM ({source_query})
+    """, f"Stage LLM prompts: {description}")
+
+    total = run_bq_scalar(f"SELECT COUNT(*) FROM {_t(staging)}")
+    if total == 0:
+        run_bq(
+            f"CREATE OR REPLACE TABLE {_t(dest_table)} AS "
+            f"SELECT '' AS item_text, CAST(NULL AS STRING) AS intent_string WHERE FALSE",
+            f"Empty dest (no items): {description}",
+        )
+        try:
+            run_bq(f"DROP TABLE IF EXISTS {_t(staging)}", f"Cleanup {staging}")
+        except Exception:
+            pass
+        return
+
+    num_batches = max(1, (total + batch_size - 1) // batch_size)
+    print(f"📊 LLM batching: {total} items → {num_batches} batch(es) of ≤{batch_size} ({description})")
+
+    for b in range(num_batches):
+        lo = b * batch_size + 1
+        hi = (b + 1) * batch_size
+        batch_sql = f"SELECT item_text, prompt FROM {_t(staging)} WHERE rn BETWEEN {lo} AND {hi}"
+        llm_cte = (
+            f"WITH llm AS (\n"
+            f"  SELECT * FROM ML.GENERATE_TEXT(\n"
+            f"    MODEL {_m(MODEL_GEMINI)},\n"
+            f"    ({batch_sql}),\n"
+            f"    {_LLM_OPTS}\n"
+            f"  )\n"
+            f")\n"
+            f"SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm"
+        )
+        if b == 0:
+            run_bq(
+                f"CREATE OR REPLACE TABLE {_t(dest_table)} AS {llm_cte}",
+                f"{description} LLM batch {b + 1}/{num_batches}",
+            )
+        else:
+            run_bq(
+                f"INSERT INTO {_t(dest_table)} (item_text, intent_string) {llm_cte}",
+                f"{description} LLM batch {b + 1}/{num_batches}",
+            )
+
+    try:
+        run_bq(f"DROP TABLE IF EXISTS {_t(staging)}", f"Cleanup {staging}")
+    except Exception:
+        pass
+
+
+def _run_embedding_batched(
+    source_query: str,
+    dest_table: str,
+    batch_size: int = _EMB_BATCH,
+    description: str = "",
+) -> None:
+    """Stage embedding inputs then run ML.GENERATE_EMBEDDING in batches, building dest_table.
+
+    source_query must produce columns: item_text STRING, intent_string STRING, content STRING.
+    dest_table will be created/replaced with: item_text STRING, intent_string STRING,
+    embedding ARRAY<FLOAT64>.
+    """
+    staging = f"{dest_table}_estage"
+    run_bq(f"""
+        CREATE OR REPLACE TABLE {_t(staging)} AS
+        SELECT ROW_NUMBER() OVER (ORDER BY item_text) AS rn, item_text, intent_string, content
+        FROM ({source_query})
+    """, f"Stage embedding inputs: {description}")
+
+    total = run_bq_scalar(f"SELECT COUNT(*) FROM {_t(staging)}")
+    if total == 0:
+        run_bq(
+            f"CREATE OR REPLACE TABLE {_t(dest_table)} AS "
+            f"SELECT '' AS item_text, CAST(NULL AS STRING) AS intent_string, "
+            f"CAST(NULL AS ARRAY<FLOAT64>) AS embedding WHERE FALSE",
+            f"Empty dest (no items): {description}",
+        )
+        try:
+            run_bq(f"DROP TABLE IF EXISTS {_t(staging)}", f"Cleanup {staging}")
+        except Exception:
+            pass
+        return
+
+    num_batches = max(1, (total + batch_size - 1) // batch_size)
+    print(f"📊 Embedding batching: {total} items → {num_batches} batch(es) of ≤{batch_size} ({description})")
+
+    for b in range(num_batches):
+        lo = b * batch_size + 1
+        hi = (b + 1) * batch_size
+        batch_sql = (
+            f"SELECT item_text, intent_string, content "
+            f"FROM {_t(staging)} WHERE rn BETWEEN {lo} AND {hi}"
+        )
+        emb_select = (
+            f"SELECT item_text, intent_string, ml_generate_embedding_result AS embedding\n"
+            f"FROM ML.GENERATE_EMBEDDING(\n"
+            f"  MODEL {_m(MODEL_EMBEDDINGS)},\n"
+            f"  ({batch_sql}),\n"
+            f"  {_EMB_OPTS}\n"
+            f")"
+        )
+        if b == 0:
+            run_bq(
+                f"CREATE OR REPLACE TABLE {_t(dest_table)} AS {emb_select}",
+                f"{description} emb batch {b + 1}/{num_batches}",
+            )
+        else:
+            run_bq(
+                f"INSERT INTO {_t(dest_table)} (item_text, intent_string, embedding) {emb_select}",
+                f"{description} emb batch {b + 1}/{num_batches}",
+            )
+
+    try:
+        run_bq(f"DROP TABLE IF EXISTS {_t(staging)}", f"Cleanup {staging}")
+    except Exception:
+        pass
+
+
+def _run_embedding_insert_batched(
+    source_query: str,
+    dataset_id: str,
+    prompt_hash: str,
+    staging_table: str,
+    batch_size: int = _EMB_BATCH,
+    description: str = "",
+) -> None:
+    """Stage uncached embedding inputs, run ML.GENERATE_EMBEDDING in batches,
+    and INSERT results directly into T_DATASET_EMBEDDINGS for a single dataset_id.
+
+    source_query must produce columns: item_text STRING, intent_string STRING, content STRING.
+    """
+    run_bq(f"""
+        CREATE OR REPLACE TABLE {_t(staging_table)} AS
+        SELECT ROW_NUMBER() OVER (ORDER BY item_text) AS rn, item_text, intent_string, content
+        FROM ({source_query})
+    """, f"Stage embedding inputs (insert): {description}")
+
+    total = run_bq_scalar(f"SELECT COUNT(*) FROM {_t(staging_table)}")
+    if total == 0:
+        print(f"✅ No uncached items to embed: {description}")
+        try:
+            run_bq(f"DROP TABLE IF EXISTS {_t(staging_table)}", f"Cleanup {staging_table}")
+        except Exception:
+            pass
+        return
+
+    num_batches = max(1, (total + batch_size - 1) // batch_size)
+    print(f"📊 Cache embed batching: {total} items → {num_batches} batch(es) of ≤{batch_size} ({description})")
+
+    for b in range(num_batches):
+        lo = b * batch_size + 1
+        hi = (b + 1) * batch_size
+        batch_sql = (
+            f"SELECT item_text, intent_string, content "
+            f"FROM {_t(staging_table)} WHERE rn BETWEEN {lo} AND {hi}"
+        )
+        run_bq(f"""
+            INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
+              (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
+            SELECT '{dataset_id}', item_text, intent_string,
+                   ml_generate_embedding_result, '{prompt_hash}', CURRENT_TIMESTAMP()
+            FROM ML.GENERATE_EMBEDDING(
+              MODEL {_m(MODEL_EMBEDDINGS)},
+              ({batch_sql}),
+              {_EMB_OPTS}
+            )
+            WHERE item_text NOT IN (
+              SELECT item_text FROM {_t(T_DATASET_EMBEDDINGS)}
+              WHERE dataset_id = '{dataset_id}' AND prompt_hash = '{prompt_hash}'
+            )
+        """, f"{description} insert-embed batch {b + 1}/{num_batches}")
+
+    try:
+        run_bq(f"DROP TABLE IF EXISTS {_t(staging_table)}", f"Cleanup {staging_table}")
+    except Exception:
+        pass
+
 
 def run_gap_analysis_pipeline(
     analysis_id: str,
@@ -520,6 +722,10 @@ def run_gap_analysis_pipeline(
     Handles text and image datasets on both source and target sides:
     - Text datasets: BQ ML embeddings (gemini-embedding-2 via remote model)
     - Image datasets: Python SDK embeddings (direct multimodal or caption-based)
+
+    ML.GENERATE_TEXT and ML.GENERATE_EMBEDDING calls are batched in chunks of
+    _LLM_BATCH / _EMB_BATCH items to avoid BigQuery's on-demand CPU-second limit
+    (~33K CPU-seconds per query).
 
     Returns the number of result rows inserted.
     """
@@ -588,39 +794,30 @@ def run_gap_analysis_pipeline(
             sp = _sq(source_prompt)
             tp = _sq(target_prompt)
 
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_intent)} AS
-                WITH llm AS (
-                  SELECT * FROM ML.GENERATE_TEXT(
-                    MODEL {_m(MODEL_GEMINI)},
-                    (
-                      SELECT DISTINCT
-                        item_text,
-                        CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                      FROM {_t(T_DATASET_ITEMS)}
-                      WHERE dataset_id IN ({source_ids_sql})
-                        {search_vol_filter}
-                    ),
-                    {_LLM_OPTS}
-                  )
-                )
-                SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-            """, "Step 1: source item intents")
+            # Step 1: source intent normalization (batched to stay under CPU limit)
+            _run_llm_batched(
+                source_query=f"""
+                    SELECT DISTINCT item_text,
+                      CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                    FROM {_t(T_DATASET_ITEMS)}
+                    WHERE dataset_id IN ({source_ids_sql})
+                      {search_vol_filter}
+                """,
+                dest_table=tmp_src_intent,
+                description="Step 1: source item intents",
+            )
 
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-                SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
-                FROM ML.GENERATE_EMBEDDING(
-                  MODEL {_m(MODEL_EMBEDDINGS)},
-                  (
+            # Step 2: source embeddings (batched)
+            _run_embedding_batched(
+                source_query=f"""
                     SELECT DISTINCT item_text, intent_string,
                       CONCAT('{_EMB_TASK_PREFIX}', intent_string) AS content
                     FROM {_t(tmp_src_intent)}
                     WHERE intent_string IS NOT NULL
-                  ),
-                  {_EMB_OPTS}
-                )
-            """, "Step 2: source item embeddings")
+                """,
+                dest_table=tmp_src_emb,
+                description="Step 2: source item embeddings",
+            )
 
             uncached = run_bq_scalar(f"""
                 SELECT COUNT(DISTINCT di.item_text)
@@ -634,70 +831,54 @@ def run_gap_analysis_pipeline(
 
             if uncached > 0:
                 tp_sq = _sq(target_prompt)
-                run_bq(f"""
-                    CREATE OR REPLACE TABLE {_t(tmp_tgt_intent)} AS
-                    WITH llm AS (
-                      SELECT * FROM ML.GENERATE_TEXT(
-                        MODEL {_m(MODEL_GEMINI)},
-                        (
-                          SELECT DISTINCT di.item_text,
-                            CONCAT('{tp_sq}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                          FROM {_t(T_DATASET_ITEMS)} di
-                          LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
-                            ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
-                            AND de.prompt_hash = '{target_ph}'
-                          WHERE di.dataset_id IN ({target_ids_sql}) AND de.item_text IS NULL
-                        ),
-                        {_LLM_OPTS}
-                      )
-                    )
-                    SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-                """, "Step 3b: target item intents for uncached items")
 
+                # Step 3b: target intent normalization (batched)
+                _run_llm_batched(
+                    source_query=f"""
+                        SELECT DISTINCT di.item_text,
+                          CONCAT('{tp_sq}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                        FROM {_t(T_DATASET_ITEMS)} di
+                        LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+                          ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
+                          AND de.prompt_hash = '{target_ph}'
+                        WHERE di.dataset_id IN ({target_ids_sql}) AND de.item_text IS NULL
+                    """,
+                    dest_table=tmp_tgt_intent,
+                    description="Step 3b: target item intents for uncached items",
+                )
+
+                # Step 3c: target embeddings cache (batched per dataset_id)
                 for did in target_dataset_ids:
-                    run_bq(f"""
-                        INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
-                          (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-                        SELECT '{did}', item_text, intent_string,
-                               ml_generate_embedding_result AS embedding,
-                               '{target_ph}', CURRENT_TIMESTAMP()
-                        FROM ML.GENERATE_EMBEDDING(
-                          MODEL {_m(MODEL_EMBEDDINGS)},
-                          (
+                    _run_embedding_insert_batched(
+                        source_query=f"""
                             SELECT DISTINCT t.item_text, t.intent_string,
                               CONCAT('{_EMB_TASK_PREFIX}', t.intent_string) AS content
                             FROM {_t(tmp_tgt_intent)} t
                             INNER JOIN {_t(T_DATASET_ITEMS)} di
                               ON t.item_text = di.item_text AND di.dataset_id = '{did}'
                             WHERE t.intent_string IS NOT NULL
-                          ),
-                          {_EMB_OPTS}
-                        )
-                        WHERE item_text NOT IN (
-                          SELECT item_text FROM {_t(T_DATASET_EMBEDDINGS)}
-                          WHERE dataset_id = '{did}' AND prompt_hash = '{target_ph}'
-                        )
-                    """, f"Step 3c: populate target embeddings cache (dataset_id={did})")
+                        """,
+                        dataset_id=did,
+                        prompt_hash=target_ph,
+                        staging_table=f"_tmp_{tid}_tgt_emb_stage",
+                        description=f"Step 3c: populate target embeddings cache (dataset_id={did})",
+                    )
 
         else:
             # Direct text mode: no LLM, embed item_text directly
             source_ph = target_ph = _DIRECT_PROMPT_HASH
 
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-                SELECT item_text, CAST(NULL AS STRING) AS intent_string,
-                       ml_generate_embedding_result AS embedding
-                FROM ML.GENERATE_EMBEDDING(
-                  MODEL {_m(MODEL_EMBEDDINGS)},
-                  (
-                    SELECT DISTINCT item_text,
+            # Step 2 (direct): source embeddings (batched)
+            _run_embedding_batched(
+                source_query=f"""
+                    SELECT DISTINCT item_text, CAST(NULL AS STRING) AS intent_string,
                       CONCAT('{_EMB_TASK_PREFIX}', item_text) AS content
                     FROM {_t(T_DATASET_ITEMS)}
                     WHERE dataset_id IN ({source_ids_sql}) {search_vol_filter}
-                  ),
-                  {_EMB_OPTS}
-                )
-            """, "Step 2 (direct): source item embeddings")
+                """,
+                dest_table=tmp_src_emb,
+                description="Step 2 (direct): source item embeddings",
+            )
 
             uncached = run_bq_scalar(f"""
                 SELECT COUNT(DISTINCT di.item_text)
@@ -711,26 +892,21 @@ def run_gap_analysis_pipeline(
 
             if uncached > 0:
                 for did in target_dataset_ids:
-                    run_bq(f"""
-                        INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
-                          (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-                        SELECT '{did}', item_text, CAST(NULL AS STRING),
-                               ml_generate_embedding_result,
-                               '{_DIRECT_PROMPT_HASH}', CURRENT_TIMESTAMP()
-                        FROM ML.GENERATE_EMBEDDING(
-                          MODEL {_m(MODEL_EMBEDDINGS)},
-                          (
-                            SELECT DISTINCT di.item_text,
+                    _run_embedding_insert_batched(
+                        source_query=f"""
+                            SELECT DISTINCT di.item_text, CAST(NULL AS STRING) AS intent_string,
                               CONCAT('{_EMB_TASK_PREFIX}', di.item_text) AS content
                             FROM {_t(T_DATASET_ITEMS)} di
                             LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
                               ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
                               AND de.prompt_hash = '{_DIRECT_PROMPT_HASH}'
                             WHERE di.dataset_id = '{did}' AND de.item_text IS NULL
-                          ),
-                          {_EMB_OPTS}
-                        )
-                    """, f"Step 3b (direct): cache target embeddings (dataset_id={did})")
+                        """,
+                        dataset_id=did,
+                        prompt_hash=_DIRECT_PROMPT_HASH,
+                        staging_table=f"_tmp_{tid}_tgt_emb_stage",
+                        description=f"Step 3b (direct): cache target embeddings (dataset_id={did})",
+                    )
 
     elif source_is_image and not target_is_image:
         # Image source → text target
@@ -747,48 +923,34 @@ def run_gap_analysis_pipeline(
                 WHERE di.dataset_id IN ({target_ids_sql}) AND de.item_text IS NULL
             """)
             if uncached > 0:
-                run_bq(f"""
-                    CREATE OR REPLACE TABLE {_t(tmp_tgt_intent)} AS
-                    WITH llm AS (
-                      SELECT * FROM ML.GENERATE_TEXT(
-                        MODEL {_m(MODEL_GEMINI)},
-                        (
-                          SELECT DISTINCT di.item_text,
-                            CONCAT('{tp_sq}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                          FROM {_t(T_DATASET_ITEMS)} di
-                          LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
-                            ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
-                            AND de.prompt_hash = '{target_ph}'
-                          WHERE di.dataset_id IN ({target_ids_sql}) AND de.item_text IS NULL
-                        ),
-                        {_LLM_OPTS}
-                      )
-                    )
-                    SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-                """, "Target text intent (image-source mode)")
+                _run_llm_batched(
+                    source_query=f"""
+                        SELECT DISTINCT di.item_text,
+                          CONCAT('{tp_sq}', '\\n\\nTopic: ', di.item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                        FROM {_t(T_DATASET_ITEMS)} di
+                        LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
+                          ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
+                          AND de.prompt_hash = '{target_ph}'
+                        WHERE di.dataset_id IN ({target_ids_sql}) AND de.item_text IS NULL
+                    """,
+                    dest_table=tmp_tgt_intent,
+                    description="Target text intent (image-source mode)",
+                )
                 for did in target_dataset_ids:
-                    run_bq(f"""
-                        INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
-                          (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-                        SELECT '{did}', item_text, intent_string,
-                               ml_generate_embedding_result, '{target_ph}', CURRENT_TIMESTAMP()
-                        FROM ML.GENERATE_EMBEDDING(
-                          MODEL {_m(MODEL_EMBEDDINGS)},
-                          (
+                    _run_embedding_insert_batched(
+                        source_query=f"""
                             SELECT DISTINCT t.item_text, t.intent_string,
                               CONCAT('{_EMB_TASK_PREFIX}', t.intent_string) AS content
                             FROM {_t(tmp_tgt_intent)} t
                             INNER JOIN {_t(T_DATASET_ITEMS)} di
                               ON t.item_text = di.item_text AND di.dataset_id = '{did}'
                             WHERE t.intent_string IS NOT NULL
-                          ),
-                          {_EMB_OPTS}
-                        )
-                        WHERE item_text NOT IN (
-                          SELECT item_text FROM {_t(T_DATASET_EMBEDDINGS)}
-                          WHERE dataset_id = '{did}' AND prompt_hash = '{target_ph}'
-                        )
-                    """, f"Target text embed (image-source, dataset={did})")
+                        """,
+                        dataset_id=did,
+                        prompt_hash=target_ph,
+                        staging_table=f"_tmp_{tid}_tgt_emb_stage",
+                        description=f"Target text embed (image-source, dataset={did})",
+                    )
         else:
             target_ph = _DIRECT_PROMPT_HASH
             uncached = run_bq_scalar(f"""
@@ -800,25 +962,21 @@ def run_gap_analysis_pipeline(
             """)
             if uncached > 0:
                 for did in target_dataset_ids:
-                    run_bq(f"""
-                        INSERT INTO {_t(T_DATASET_EMBEDDINGS)}
-                          (dataset_id, item_text, intent_string, embedding, prompt_hash, embedded_at)
-                        SELECT '{did}', item_text, CAST(NULL AS STRING),
-                               ml_generate_embedding_result, '{_DIRECT_PROMPT_HASH}', CURRENT_TIMESTAMP()
-                        FROM ML.GENERATE_EMBEDDING(
-                          MODEL {_m(MODEL_EMBEDDINGS)},
-                          (
-                            SELECT DISTINCT di.item_text,
+                    _run_embedding_insert_batched(
+                        source_query=f"""
+                            SELECT DISTINCT di.item_text, CAST(NULL AS STRING) AS intent_string,
                               CONCAT('{_EMB_TASK_PREFIX}', di.item_text) AS content
                             FROM {_t(T_DATASET_ITEMS)} di
                             LEFT JOIN {_t(T_DATASET_EMBEDDINGS)} de
                               ON di.item_text = de.item_text AND di.dataset_id = de.dataset_id
                               AND de.prompt_hash = '{_DIRECT_PROMPT_HASH}'
                             WHERE di.dataset_id = '{did}' AND de.item_text IS NULL
-                          ),
-                          {_EMB_OPTS}
-                        )
-                    """, f"Target text direct embed (image-source, dataset={did})")
+                        """,
+                        dataset_id=did,
+                        prompt_hash=_DIRECT_PROMPT_HASH,
+                        staging_table=f"_tmp_{tid}_tgt_emb_stage",
+                        description=f"Target text direct embed (image-source, dataset={did})",
+                    )
 
     elif not source_is_image and target_is_image:
         # Text source → image target
@@ -826,53 +984,44 @@ def run_gap_analysis_pipeline(
         if use_intent_normalization:
             source_ph = compute_prompt_hash(source_prompt)
             sp = _sq(source_prompt)
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_intent)} AS
-                WITH llm AS (
-                  SELECT * FROM ML.GENERATE_TEXT(
-                    MODEL {_m(MODEL_GEMINI)},
-                    (
-                      SELECT DISTINCT item_text,
-                        CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
-                      FROM {_t(T_DATASET_ITEMS)}
-                      WHERE dataset_id IN ({source_ids_sql}) {search_vol_filter}
-                    ),
-                    {_LLM_OPTS}
-                  )
-                )
-                SELECT item_text, {_PARSE_INTENT} AS intent_string FROM llm
-            """, "Step 1: source intents (text-source, image-target)")
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-                SELECT item_text, intent_string, ml_generate_embedding_result AS embedding
-                FROM ML.GENERATE_EMBEDDING(
-                  MODEL {_m(MODEL_EMBEDDINGS)},
-                  (
+
+            # Step 1: source intent (batched)
+            _run_llm_batched(
+                source_query=f"""
+                    SELECT DISTINCT item_text,
+                      CONCAT('{sp}', '\\n\\nKeyword: ', item_text, '{_INTENT_JSON_SUFFIX}') AS prompt
+                    FROM {_t(T_DATASET_ITEMS)}
+                    WHERE dataset_id IN ({source_ids_sql}) {search_vol_filter}
+                """,
+                dest_table=tmp_src_intent,
+                description="Step 1: source intents (text-source, image-target)",
+            )
+
+            # Step 2: source embeddings (batched)
+            _run_embedding_batched(
+                source_query=f"""
                     SELECT DISTINCT item_text, intent_string,
                       CONCAT('{_EMB_TASK_PREFIX}', intent_string) AS content
                     FROM {_t(tmp_src_intent)}
                     WHERE intent_string IS NOT NULL
-                  ),
-                  {_EMB_OPTS}
-                )
-            """, "Step 2: source embeddings (text-source, image-target)")
+                """,
+                dest_table=tmp_src_emb,
+                description="Step 2: source embeddings (text-source, image-target)",
+            )
         else:
             source_ph = _DIRECT_PROMPT_HASH
-            run_bq(f"""
-                CREATE OR REPLACE TABLE {_t(tmp_src_emb)} AS
-                SELECT item_text, CAST(NULL AS STRING) AS intent_string,
-                       ml_generate_embedding_result AS embedding
-                FROM ML.GENERATE_EMBEDDING(
-                  MODEL {_m(MODEL_EMBEDDINGS)},
-                  (
-                    SELECT DISTINCT item_text,
+
+            # Step 2 (direct): source embeddings (batched)
+            _run_embedding_batched(
+                source_query=f"""
+                    SELECT DISTINCT item_text, CAST(NULL AS STRING) AS intent_string,
                       CONCAT('{_EMB_TASK_PREFIX}', item_text) AS content
                     FROM {_t(T_DATASET_ITEMS)}
                     WHERE dataset_id IN ({source_ids_sql}) {search_vol_filter}
-                  ),
-                  {_EMB_OPTS}
-                )
-            """, "Step 2 (direct): source embeddings (text-source, image-target)")
+                """,
+                dest_table=tmp_src_emb,
+                description="Step 2 (direct): source embeddings (text-source, image-target)",
+            )
 
     else:
         # Image source → image target (both Python SDK)
