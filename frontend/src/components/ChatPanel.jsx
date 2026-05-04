@@ -340,16 +340,17 @@ export default function ChatPanel({
       })
       const data = await res.json()
       if (!res.ok) { addMsg({ role: 'assistant', text: `Error: ${data.detail || 'Something went wrong.'}` }); return }
+      const ct = data.companion_text || undefined
       if (data.type === 'query') {
-        addMsg({ role: 'assistant', sql: data.sql, explanation: data.explanation, queryStatus: 'pending' })
+        addMsg({ role: 'assistant', text: ct, sql: data.sql, explanation: data.explanation, queryStatus: 'pending' })
       } else if (data.type === 'peek') {
-        addMsg({ role: 'assistant', isPeek: true, explanation: data.explanation, previewRows: data.preview_rows, includeImages: !!data.include_images, peekStatus: 'pending' })
+        addMsg({ role: 'assistant', text: ct, isPeek: true, explanation: data.explanation, previewRows: data.preview_rows, includeImages: !!data.include_images, peekStatus: 'pending' })
       } else if (data.type === 'create_dataset') {
-        addMsg({ role: 'assistant', isCreateDataset: true, datasetName: data.name, datasetSql: data.sql || '', datasetStatus: 'pending' })
+        addMsg({ role: 'assistant', text: ct, isCreateDataset: true, datasetName: data.name, datasetSql: data.sql || '', datasetStatus: 'pending' })
       } else if (data.type === 'toggle_filter' && mode === 'gap') {
-        addMsg({ role: 'assistant', isToggleFilter: true, executionId: data.execution_id, filterName: data.name, filterMode: data.mode, reason: data.reason, toggleStatus: 'pending' })
+        addMsg({ role: 'assistant', text: ct, isToggleFilter: true, executionId: data.execution_id, filterName: data.name, filterMode: data.mode, reason: data.reason, toggleStatus: 'pending' })
       } else if (data.type === 'create_filter_execution' && mode === 'gap') {
-        addMsg({ role: 'assistant', isCreateFilter: true, filterId: data.filter_id, filterName: data.name, reason: data.reason, filterExecStatus: 'pending' })
+        addMsg({ role: 'assistant', text: ct, isCreateFilter: true, filterId: data.filter_id, filterName: data.name, reason: data.reason, filterExecStatus: 'pending' })
       } else {
         addMsg({ role: 'assistant', text: data.text || '(no response)' })
       }

@@ -176,15 +176,57 @@ def _strip_fences(raw: str) -> str:
     return raw
 
 
-def _parse_action(raw: str) -> Optional[dict]:
+def _extract_action_and_text(raw: str):
+    """Extract an action JSON object and any surrounding prose from a mixed LLM response.
+
+    The model sometimes prefixes or appends an action JSON with conversational text.
+    This scans for the first valid JSON object containing an 'action' key anywhere
+    in the response.
+
+    Returns (action_dict_or_None, companion_text_str).
+    """
     text = _strip_fences(raw)
+
+    # Fast path: the whole response is already pure JSON
     try:
-        action = json.loads(text)
-        if isinstance(action, dict) and action.get("action"):
-            return action
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj.get("action"):
+            return obj, ""
     except (json.JSONDecodeError, TypeError):
         pass
-    return None
+
+    # Scan for an embedded JSON object using brace-depth matching
+    start = 0
+    while True:
+        idx = text.find("{", start)
+        if idx == -1:
+            break
+        depth = 0
+        for i in range(idx, len(text)):
+            c = text[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[idx: i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict) and obj.get("action"):
+                            companion = (text[:idx] + text[i + 1:]).strip()
+                            return obj, companion
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    break
+        start = idx + 1
+
+    return None, text
+
+
+def _parse_action(raw: str) -> Optional[dict]:
+    """Compat shim — returns only the action dict (ignores companion text)."""
+    action, _ = _extract_action_and_text(raw)
+    return action
 
 
 def _get_chat_type_prompt(type_key: str) -> str:
@@ -384,7 +426,7 @@ def dataset_chat_message(dataset_id: str, payload: DatasetChatMessageRequest):
     prompt = f"{system}{history_block}\n\nUser: {payload.message}\nAssistant:"
 
     raw = _call_gemini(prompt)
-    action = _parse_action(raw)
+    action, companion_text = _extract_action_and_text(raw)
 
     if action:
         act_type = action.get("action")
@@ -393,12 +435,12 @@ def dataset_chat_message(dataset_id: str, payload: DatasetChatMessageRequest):
                 sql = _validate_sql(action["sql"].strip())
             except ValueError as exc:
                 return {"type": "reply", "text": f"I tried to write a query but it was blocked for safety: {exc}. Please rephrase."}
-            return {"type": "query", "sql": sql, "explanation": action.get("explanation", "")}
+            return {"type": "query", "sql": sql, "explanation": action.get("explanation", ""), "companion_text": companion_text}
 
         elif act_type == "peek":
             preview_rows = max(1, min(int(action.get("preview_rows", 25)), 500))
             include_images = bool(action.get("include_images", False))
-            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images}
+            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images, "companion_text": companion_text}
 
         elif act_type == "create_dataset":
             name = action.get("name") or f"Subset from {dataset_name}"
@@ -408,7 +450,7 @@ def dataset_chat_message(dataset_id: str, payload: DatasetChatMessageRequest):
                     sql = _validate_sql(sql)
                 except ValueError as exc:
                     return {"type": "reply", "text": f"I tried to create a dataset but the query was blocked: {exc}. Please rephrase."}
-            return {"type": "create_dataset", "name": name, "sql": sql}
+            return {"type": "create_dataset", "name": name, "sql": sql, "companion_text": companion_text}
 
     return {"type": "reply", "text": raw}
 
@@ -700,7 +742,7 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
     prompt = f"{system}{history_block}\n\nUser: {payload.message}\nAssistant:"
 
     raw = _call_gemini(prompt)
-    action = _parse_action(raw)
+    action, companion_text = _extract_action_and_text(raw)
 
     if action:
         act_type = action.get("action")
@@ -709,12 +751,12 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
                 sql = _validate_sql(action["sql"].strip())
             except ValueError as exc:
                 return {"type": "reply", "text": f"I tried to write a query but it was blocked for safety: {exc}. Please rephrase."}
-            return {"type": "query", "sql": sql, "explanation": action.get("explanation", "")}
+            return {"type": "query", "sql": sql, "explanation": action.get("explanation", ""), "companion_text": companion_text}
 
         elif act_type == "peek":
             preview_rows = max(1, min(int(action.get("preview_rows", 25)), 500))
             include_images = bool(action.get("include_images", False))
-            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images}
+            return {"type": "peek", "explanation": action.get("explanation", ""), "preview_rows": preview_rows, "include_images": include_images, "companion_text": companion_text}
 
         elif act_type == "toggle_filter":
             mode = action.get("mode", "any")
@@ -726,6 +768,7 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
                 "name": action.get("name", ""),
                 "mode": mode,
                 "reason": action.get("reason", ""),
+                "companion_text": companion_text,
             }
 
         elif act_type == "create_filter_execution":
@@ -734,11 +777,12 @@ def gap_chat_message(analysis_id: str, payload: GapChatMessageRequest):
                 "filter_id": action.get("filter_id", ""),
                 "name": action.get("name", ""),
                 "reason": action.get("reason", ""),
+                "companion_text": companion_text,
             }
 
         elif act_type == "create_dataset":
             name = action.get("name") or f"Subset from {analysis_name}"
-            return {"type": "create_dataset", "name": name}
+            return {"type": "create_dataset", "name": name, "companion_text": companion_text}
 
     return {"type": "reply", "text": raw}
 
