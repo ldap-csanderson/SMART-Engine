@@ -11,6 +11,12 @@ Instructions here cover *how* to operate as an agent, not what the system does.
 
 Known environments: `csanderson`, `people`, `ltv-smart-engine`. Check `deployments/*.env` for others.
 
+| Environment        | URL                                                   |
+|--------------------|-------------------------------------------------------|
+| `csanderson`       | https://smart-engine-727077869999.us-central1.run.app |
+| `people`           | https://smart-engine-1000183467008.us-central1.run.app|
+| `ltv-smart-engine` | https://smart-engine-659661214201.us-central1.run.app |
+
 **Never run `terraform apply` for routine deploys.** Terraform is `--init` only.
 
 ## Fresh GCP project
@@ -22,7 +28,13 @@ Known environments: `csanderson`, `people`, `ltv-smart-engine`. Check `deploymen
 Steps:
 1. Create `deployments/<env-name>.env` with `PROJECT_ID` and `BRAND_NAME`
 2. (Optional) Place Google Ads credentials at `scripts/google-ads.yaml`
-3. Run `./deploy.sh <env-name> --init`
+3. Authenticate ADC with storage scopes (required for Terraform GCS backend):
+   ```bash
+   gcloud auth application-default login \
+     --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/devstorage.read_write"
+   gcloud auth application-default set-quota-project <PROJECT_ID>
+   ```
+4. Run `./deploy.sh <env-name> --init`
 
 The `--init` script handles everything automatically:
 - Terraform provisions all infrastructure (APIs, service accounts, IAM, BQ, Firestore, Artifact Registry, Secret Manager)
@@ -37,6 +49,18 @@ If deployed without credentials, update the secret later:
 ```bash
 gcloud secrets versions add google-ads-yaml \
   --data-file=scripts/google-ads.yaml --project=<PROJECT_ID>
+```
+
+## ⚠️ Terraform state is isolated per project
+
+Each project has its own GCS state bucket: `<PROJECT_ID>-smart-engine-tfstate`.
+**Never run `terraform apply` against one project while initialized for another.**
+Always re-init with `-reconfigure` when switching projects:
+```bash
+terraform init \
+  -backend-config="bucket=<PROJECT_ID>-smart-engine-tfstate" \
+  -backend-config="prefix=state" \
+  -reconfigure
 ```
 
 ## If deploy.sh fails mid-way
