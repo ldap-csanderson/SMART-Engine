@@ -23,31 +23,60 @@ provider "google" {
   region  = var.region
 }
 
+# ---------------------------------------------------------------------------
 # Enable required APIs
+# ---------------------------------------------------------------------------
+
+resource "google_project_service" "run" {
+  project            = var.project_id
+  service            = "run.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "cloudbuild" {
+  project            = var.project_id
+  service            = "cloudbuild.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "artifactregistry" {
+  project            = var.project_id
+  service            = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "secretmanager" {
+  project            = var.project_id
+  service            = "secretmanager.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "firestore" {
+  project            = var.project_id
+  service            = "firestore.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_project_service" "bigquery" {
-  project = var.project_id
-  service = "bigquery.googleapis.com"
-
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "iam" {
-  project = var.project_id
-  service = "iam.googleapis.com"
-
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "aiplatform" {
-  project = var.project_id
-  service = "aiplatform.googleapis.com"
-
+  project            = var.project_id
+  service            = "bigquery.googleapis.com"
   disable_on_destroy = false
 }
 
 resource "google_project_service" "bigqueryconnection" {
-  project = var.project_id
-  service = "bigqueryconnection.googleapis.com"
+  project            = var.project_id
+  service            = "bigqueryconnection.googleapis.com"
+  disable_on_destroy = false
+}
 
+resource "google_project_service" "aiplatform" {
+  project            = var.project_id
+  service            = "aiplatform.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "iam" {
+  project            = var.project_id
+  service            = "iam.googleapis.com"
   disable_on_destroy = false
 }

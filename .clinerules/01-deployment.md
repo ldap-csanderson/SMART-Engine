@@ -21,7 +21,15 @@ Known environments: `csanderson`, `people`. Check `deployments/*.env` for others
 
 First:
 1. Create `deployments/<env-name>.env` with `PROJECT_ID` and `BRAND_NAME`
-2. Complete manual GCP setup in DEPLOY.md (enable APIs, create secret, Artifact Registry repo)
+2. Upload Google Ads credentials (the only manual step — everything else is Terraform):
+   ```bash
+   gcloud secrets create google-ads-yaml --project=<PROJECT_ID>
+   gcloud secrets versions add google-ads-yaml \
+     --data-file=scripts/google-ads.yaml --project=<PROJECT_ID>
+   ```
+3. Run `./deploy.sh <env-name> --init` — Terraform enables APIs + creates all infra
+
+Post-deploy: register OAuth redirect URIs in GCP Console (printed at end of deploy.sh).
 
 ## If deploy.sh fails mid-way
 
