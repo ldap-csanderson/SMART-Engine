@@ -16,7 +16,7 @@ A single `deploy.sh` script handles all environments. No deployment branches nee
 |----------------------|-----------------------------------|-------------------------------------------------------------|
 | `csanderson`         | csanderson-experimental-443821    | https://smart-engine-727077869999.us-central1.run.app       |
 | `people`             | people-gandalf                    | https://smart-engine-1000183467008.us-central1.run.app      |
-| `ltv-smart-engine`   | ltv-smart-engine                  | https://smart-engine-<number>.us-central1.run.app           |
+| `ltv-smart-engine`   | ltv-smart-engine                  | https://smart-engine-659661214201.us-central1.run.app       |
 
 ---
 
