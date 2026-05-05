@@ -86,10 +86,12 @@ if [[ "$INIT_MODE" == "--init" ]]; then
 
   # Create GCS bucket for Terraform state (idempotent)
   TF_STATE_BUCKET="${PROJECT_ID}-smart-engine-tfstate"
-  if ! gsutil ls -b "gs://${TF_STATE_BUCKET}" &>/dev/null; then
+  if ! gcloud storage buckets describe "gs://${TF_STATE_BUCKET}" &>/dev/null; then
     echo "  Creating Terraform state bucket: gs://${TF_STATE_BUCKET}"
-    gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${TF_STATE_BUCKET}"
-    gsutil versioning set on "gs://${TF_STATE_BUCKET}"
+    gcloud storage buckets create "gs://${TF_STATE_BUCKET}" \
+      --project="$PROJECT_ID" \
+      --location="$REGION"
+    gcloud storage buckets update "gs://${TF_STATE_BUCKET}" --versioning
   else
     echo "  ✅ Terraform state bucket: gs://${TF_STATE_BUCKET}"
   fi
@@ -102,9 +104,26 @@ if [[ "$INIT_MODE" == "--init" ]]; then
 
   terraform apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
-    -var="region=${REGION}" \
-    -var="app_image=${IMAGE_TAG}"
+    -var="region=${REGION}"
   cd ..
+  echo ""
+
+  # Push google-ads.yaml secret version
+  echo "🔑 Uploading Google Ads credentials to Secret Manager..."
+  GOOGLE_ADS_FILE="scripts/google-ads.yaml"
+  if [[ -f "$GOOGLE_ADS_FILE" ]]; then
+    gcloud secrets versions add google-ads-yaml \
+      --data-file="$GOOGLE_ADS_FILE" \
+      --project="$PROJECT_ID"
+    echo "  ✅ Uploaded $GOOGLE_ADS_FILE"
+  else
+    echo "  ⚠️  No $GOOGLE_ADS_FILE found — uploading placeholder."
+    echo "  Update the secret later via: gcloud secrets versions add google-ads-yaml --data-file=<your-file> --project=$PROJECT_ID"
+    printf "# Placeholder — replace with real Google Ads credentials\n" | \
+      gcloud secrets versions add google-ads-yaml \
+        --data-file=- \
+        --project="$PROJECT_ID"
+  fi
   echo ""
 fi
 

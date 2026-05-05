@@ -20,8 +20,3 @@ variable "service_account_name" {
   type        = string
   default     = "smart-engine-sa"
 }
-
-variable "app_image" {
-  description = "Application Docker image URL (includes both frontend and backend)"
-  type        = string
-}

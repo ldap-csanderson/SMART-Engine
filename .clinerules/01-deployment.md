@@ -9,7 +9,7 @@ Instructions here cover *how* to operate as an agent, not what the system does.
 ./deploy.sh <env-name>
 ```
 
-Known environments: `csanderson`, `people`. Check `deployments/*.env` for others.
+Known environments: `csanderson`, `people`, `ltv-smart-engine`. Check `deployments/*.env` for others.
 
 **Never run `terraform apply` for routine deploys.** Terraform is `--init` only.
 
@@ -19,17 +19,25 @@ Known environments: `csanderson`, `people`. Check `deployments/*.env` for others
 ./deploy.sh <env-name> --init
 ```
 
-First:
+Steps:
 1. Create `deployments/<env-name>.env` with `PROJECT_ID` and `BRAND_NAME`
-2. Upload Google Ads credentials (the only manual step — everything else is Terraform):
-   ```bash
-   gcloud secrets create google-ads-yaml --project=<PROJECT_ID>
-   gcloud secrets versions add google-ads-yaml \
-     --data-file=scripts/google-ads.yaml --project=<PROJECT_ID>
-   ```
-3. Run `./deploy.sh <env-name> --init` — Terraform enables APIs + creates all infra
+2. (Optional) Place Google Ads credentials at `scripts/google-ads.yaml`
+3. Run `./deploy.sh <env-name> --init`
+
+The `--init` script handles everything automatically:
+- Terraform provisions all infrastructure (APIs, service accounts, IAM, BQ, Firestore, Artifact Registry, Secret Manager)
+- Uploads `scripts/google-ads.yaml` as the initial secret version (or a placeholder if the file is absent)
+- Builds and deploys to Cloud Run
+
+> **Note:** Cloud Run is managed by `deploy.sh` (not Terraform). Terraform only provisions supporting infrastructure.
 
 Post-deploy: register OAuth redirect URIs in GCP Console (printed at end of deploy.sh).
+
+If deployed without credentials, update the secret later:
+```bash
+gcloud secrets versions add google-ads-yaml \
+  --data-file=scripts/google-ads.yaml --project=<PROJECT_ID>
+```
 
 ## If deploy.sh fails mid-way
 

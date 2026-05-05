@@ -12,10 +12,11 @@ A single `deploy.sh` script handles all environments. No deployment branches nee
 
 ## Existing Deployments
 
-| Environment     | GCP Project                       | URL                                                         |
-|-----------------|-----------------------------------|-------------------------------------------------------------|
-| `csanderson`    | csanderson-experimental-443821    | https://smart-engine-727077869999.us-central1.run.app       |
-| `people`        | people-gandalf                    | https://smart-engine-1000183467008.us-central1.run.app      |
+| Environment          | GCP Project                       | URL                                                         |
+|----------------------|-----------------------------------|-------------------------------------------------------------|
+| `csanderson`         | csanderson-experimental-443821    | https://smart-engine-727077869999.us-central1.run.app       |
+| `people`             | people-gandalf                    | https://smart-engine-1000183467008.us-central1.run.app      |
+| `ltv-smart-engine`   | ltv-smart-engine                  | https://smart-engine-<number>.us-central1.run.app           |
 
 ---
 
@@ -59,20 +60,11 @@ BRAND_NAME="Your Brand Name"
 
 Commit the new `.env` file to `main`.
 
-### 3. Upload Google Ads credentials (only manual step)
+### 3. (Optional) Place Google Ads credentials
 
-Terraform manages everything except the actual secret *value*, which contains your
-credentials and cannot be stored in source control.
-
-```bash
-gcloud secrets create google-ads-yaml --project=<PROJECT_ID>
-gcloud secrets versions add google-ads-yaml \
-  --data-file=scripts/google-ads.yaml \
-  --project=<PROJECT_ID>
-```
-
-> All other resources (APIs, Artifact Registry, BigQuery, Firestore, Cloud Run,
-> service accounts, IAM) are provisioned automatically by Terraform in the next step.
+If you have a `scripts/google-ads.yaml`, the deploy script will automatically
+upload it as the initial secret version. If the file is absent, a placeholder
+is uploaded and you can replace it later.
 
 ### 4. Provision + build + deploy
 
@@ -84,8 +76,9 @@ This will:
 1. Create a GCS bucket for Terraform state (`<PROJECT_ID>-smart-engine-tfstate`)
 2. Run `terraform init` (GCS backend, isolated state per project)
 3. Run `terraform apply` — enables all required APIs, creates all infrastructure
-4. Build the Docker image
-5. Deploy to Cloud Run
+4. Upload `scripts/google-ads.yaml` to Secret Manager (or a placeholder if absent)
+5. Build the Docker image
+6. Deploy to Cloud Run
 
 ### 5. Post-deployment: register OAuth redirect URIs
 
@@ -99,6 +92,16 @@ https://<service-url>/api/auth/google-drive/callback
 Navigate to: GCP Console → APIs & Services → Credentials → OAuth 2.0 Client IDs
 
 The service URL is printed at the end of `deploy.sh`.
+
+### 6. Replace placeholder credentials (if needed)
+
+If you deployed without `scripts/google-ads.yaml`, update the secret later:
+
+```bash
+gcloud secrets versions add google-ads-yaml \
+  --data-file=scripts/google-ads.yaml \
+  --project=<PROJECT_ID>
+```
 
 ---
 
@@ -114,9 +117,13 @@ terraform init \
   -backend-config="bucket=<PROJECT_ID>-smart-engine-tfstate" \
   -backend-config="prefix=state"
 
-terraform plan -var="project_id=<PROJECT_ID>" -var="app_image=..."
-terraform apply -var="project_id=<PROJECT_ID>" -var="app_image=..."
+terraform plan -var="project_id=<PROJECT_ID>"
+terraform apply -var="project_id=<PROJECT_ID>"
 ```
+
+> **Note:** Cloud Run is managed entirely by `deploy.sh` (via `gcloud run deploy`),
+> not by Terraform. Terraform provisions infrastructure only: APIs, service accounts,
+> IAM, BigQuery, Firestore, Artifact Registry, and Secret Manager.
 
 ### ⚠️ Terraform State Warning
 
@@ -135,7 +142,7 @@ terraform init \
 ## Adding a New Deployment Environment
 
 1. Create `deployments/<env-name>.env` with `PROJECT_ID` and `BRAND_NAME`
-2. Upload the google-ads.yaml secret (step 3 above)
+2. (Optional) Place Google Ads credentials at `scripts/google-ads.yaml`
 3. Run `./deploy.sh <env-name> --init`
 4. Register OAuth redirect URIs
 5. Commit the `.env` file to `main`
@@ -156,6 +163,11 @@ the brand requires a redeploy.
 then passes `GCP_PROJECT_ID` and `CLOUD_RUN_URL` as Cloud Run env vars. The
 backend derives OAuth redirect URIs from `CLOUD_RUN_URL` automatically. No
 project-specific values are hardcoded in source files.
+
+### Secret management
+Terraform creates the Secret Manager secret shell. `deploy.sh --init` uploads
+the initial version from `scripts/google-ads.yaml` (or a placeholder). Subsequent
+credential updates are done via `gcloud secrets versions add`.
 
 ---
 

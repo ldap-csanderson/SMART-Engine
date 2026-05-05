@@ -5,8 +5,11 @@
 - `deployments/*.env` — one file per GCP target, committed to `main` (no deployment branches)
 - `deploy.sh <env>` — reads `.env`, derives Cloud Run URL from project number, builds + deploys
 - `cloudbuild.yaml` — Cloud Build config; `_BRAND_NAME` substitution bakes brand into image
-- `terraform/` — GCS backend; state isolated per project at `gs://<PROJECT_ID>-smart-engine-tfstate/`
+- `terraform/` — GCS backend; state isolated per project at `gs://<PROJECT_ID>-smart-engine-tfstate/`; provisions APIs, service accounts, IAM, BQ, Firestore, Artifact Registry, Secret Manager — **not** Cloud Run
 - `backend/config.yaml` — generic defaults only; no project-specific values
+
+> **Cloud Run is managed by `deploy.sh`** (via `gcloud run deploy`), not Terraform.
+> On `--init`, `deploy.sh` also uploads the initial `google-ads.yaml` secret version.
 
 ## Runtime configuration (backend)
 
